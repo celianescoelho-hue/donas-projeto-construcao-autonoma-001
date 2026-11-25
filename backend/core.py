@@ -31,6 +31,7 @@ OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 DEFAULT_MODELS = [
     {"id": "qwen/qwen3-coder-next", "name": "Qwen3 Coder Next (rápido)"},
     {"id": "qwen/qwen3-coder", "name": "Qwen3 Coder (tarefas pesadas)"},
+    {"id": "deepseek/deepseek-chat-v3-0324", "name": "DeepSeek V3 (Cirúrgico)"},
 ]
 
 ROLES = ["admin", "member"]
@@ -75,8 +76,15 @@ def effective_role(role) -> str:
     return role if role in ROLES else DEFAULT_ROLE
 
 
+def admin_emails() -> set:
+    return {e.strip().lower() for e in os.environ.get("ADMIN_EMAIL", "").split(",") if e.strip()}
+
+
+SEEDED_MODELS = [{"id": "deepseek/deepseek-chat-v3-0324", "name": "DeepSeek V3 (Cirúrgico)"}]
+
+
 def _clerk_profile(user_id: str) -> dict:
-    admins = {e.strip().lower() for e in os.environ.get("ADMIN_EMAIL", "").split(",") if e.strip()}
+    admins = admin_emails()
     r = requests.get(f"https://api.clerk.com/v1/users/{user_id}", timeout=10,
                      headers={"Authorization": f"Bearer {os.environ['CLERK_SECRET_KEY']}", "User-Agent": "emergent-app"})
     r.raise_for_status()
@@ -100,6 +108,11 @@ async def current_member(user: dict = Depends(require_user)) -> dict:
             {"$setOnInsert": {"user_id": uid, "role": role, "email": prof["email"], "name": prof["name"],
                               "blocked": False, "created_at": now()}},
             upsert=True, projection={"_id": 0}, return_document=ReturnDocument.AFTER)
+    elif member.get("role") != "admin" and (member.get("email") or "").lower() in admin_emails():
+        prof = await run_in_threadpool(_clerk_profile, uid)
+        if prof["is_admin"]:
+            await db.users.update_one({"user_id": uid}, {"$set": {"role": "admin"}})
+            member["role"] = "admin"
     if member.get("env") != ENV:
         await db.users.update_one({"user_id": uid}, {"$set": {"env": ENV}})
     return {**member, "env": ENV, "role": effective_role(member["role"])}
@@ -118,7 +131,14 @@ async def get_settings() -> dict:
     if not s:
         s = {"key": "global", "enabled_models": DEFAULT_MODELS, "default_model": DEFAULT_MODELS[0]["id"],
              "daily_limit_usd": float(os.environ.get("DEFAULT_DAILY_LIMIT_USD", "2"))}
+        s["seeded_models"] = [m["id"] for m in SEEDED_MODELS]
         await db.settings.update_one({"key": "global"}, {"$setOnInsert": s}, upsert=True)
+    missing = [m for m in SEEDED_MODELS if m["id"] not in s.get("seeded_models", [])]
+    if missing:
+        ids = {m["id"] for m in s["enabled_models"]}
+        s["enabled_models"] = s["enabled_models"] + [m for m in missing if m["id"] not in ids]
+        s["seeded_models"] = s.get("seeded_models", []) + [m["id"] for m in missing]
+        await db.settings.update_one({"key": "global"}, {"$set": {"enabled_models": s["enabled_models"], "seeded_models": s["seeded_models"]}})
     return s
 
 
