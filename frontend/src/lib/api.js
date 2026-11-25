@@ -46,7 +46,12 @@ export async function streamChat(token, projectId, body, onEvent, signal) {
   });
   if (!res.ok || !res.body) {
     let msg = `Erro ${res.status}`;
-    try { msg = (await res.json()).detail || msg; } catch {}
+    try {
+      const d = (await res.json()).detail;
+      if (Array.isArray(d)) msg = d.map((x) => x.msg || JSON.stringify(x)).join("; ");
+      else if (d) msg = d;
+    } catch {}
+    if (res.status === 413) msg = "Mensagem grande demais. Anexe o conteúdo como arquivo (📎) em vez de colar no chat.";
     throw new Error(msg);
   }
   const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();

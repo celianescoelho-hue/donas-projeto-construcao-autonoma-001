@@ -5,6 +5,7 @@ import json
 import uuid
 import difflib
 import logging
+import zipfile
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
@@ -208,6 +209,28 @@ def summarize_image(path: str, data: bytes, content_type: str) -> str:
     return f"Imagem {content_type}{dims}, {len(data)//1024} KB. Use pelo caminho '{path}'."
 
 
+def summarize_pdf(data: bytes) -> str:
+    try:
+        from pypdf import PdfReader
+        r = PdfReader(io.BytesIO(data))
+        title = (r.metadata.title if r.metadata else None) or "—"
+        first = re.sub(r"\s+", " ", (r.pages[0].extract_text() or "") if r.pages else "").strip()[:200]
+        return f"PDF, {len(r.pages)} páginas, {len(data)//1024} KB. Título: {str(title)[:80]}. Início: {first or '—'}. Leia com read_file (páginas)."
+    except Exception:
+        return f"PDF, {len(data)//1024} KB (não foi possível ler o texto)."
+
+
+def summarize_zip(data: bytes) -> str:
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+        names = [i.filename for i in zf.infolist() if not i.is_dir()]
+        total = sum(i.file_size for i in zf.infolist())
+        return (f"ZIP com {len(names)} arquivos ({total//1024} KB descompactado). Ex.: {', '.join(names[:15])}"
+                f"{' …' if len(names) > 15 else ''}. Use extract_zip para descompactar no projeto.")
+    except Exception:
+        return f"ZIP inválido, {len(data)//1024} KB."
+
+
 # ---------- Object storage ----------
 STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
 STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
@@ -245,6 +268,7 @@ def get_object(path: str) -> tuple[bytes, str]:
 
 IMAGE_TYPES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp",
                "gif": "image/gif", "ico": "image/x-icon"}
+DOC_TYPES = {"pdf": "application/pdf", "zip": "application/zip"}
 
 
 async def store_binary(user_id: str, path: str, data: bytes, content_type: str) -> str:

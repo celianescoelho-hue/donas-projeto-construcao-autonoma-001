@@ -6,8 +6,12 @@ from datetime import datetime, timezone
 
 import httpx
 
+import io
+import re
+from urllib.parse import urlparse
+from starlette.concurrency import run_in_threadpool
 from core import (db, now, new_id, decrypt, get_settings, unified_diff, record_version, file_snapshot,
-                  OPENROUTER_BASE, logger)
+                  OPENROUTER_BASE, logger, get_object, store_binary, summarize_text)
 
 MAX_STEPS = 30
 SMALL_FILE_LINES = 60
@@ -26,14 +30,16 @@ SEGURANÇA OBRIGATÓRIA (sempre, em todo back-end gerado):
 - Segredos (MONGO_URL, JWT_SECRET, chaves de API) apenas em variáveis de ambiente: lidos com os.environ, listados em backend/.env.example sem valores reais; nunca colocar chaves no front-end nem no código.
 - CORS restrito por CORS_ORIGINS do .env, rate limit simples em login/cadastro, e mensagens de erro sem detalhes internos.
 
-FERRAMENTAS — você NÃO tem terminal, shell, git, npm, pip nem acesso à internet. Não existe run_shell_command, execute_command, bash, git clone nem nada parecido: nunca tente chamá-los. Você só pode usar estas 6 ferramentas: list_files, read_file, search_files, replace_in_file, create_file, delete_file.
+FERRAMENTAS — você NÃO tem terminal, shell, git, npm, pip nem acesso à internet. Não existe run_shell_command, execute_command, bash, git clone nem nada parecido: nunca tente chamá-los. Você só pode usar estas ferramentas: list_files, read_file, search_in_files, replace_in_file, create_file, delete_file, move_or_copy_file, clean_external_links, extract_zip.
 - Para instalar dependências, apenas edite frontend/package.json ou backend/requirements.txt e explique os comandos no README.
 - Se o usuário pedir para clonar/importar um repositório do GitHub, diga para ele usar o botão "Importar do GitHub" (a plataforma baixa os arquivos sozinha); não tente clonar.
 Trabalhe como um agente:
-- Use list_files / read_file / search_files para entender o projeto antes de editar arquivos existentes. Leia só os trechos necessários (start_line/end_line).
+- Use search_in_files (texto ou regex, devolve arquivo:linha) para achar onde algo está ANTES de ler; depois read_file só no intervalo de linhas necessário. Use list_files / read_file / search_in_files para entender o projeto antes de editar arquivos existentes. Leia só os trechos necessários (start_line/end_line).
 - Para alterar um arquivo EXISTENTE use replace_in_file enviando APENAS o trecho antigo (old_text, exato, único no arquivo, com contexto suficiente) e o novo. Nunca reescreva um arquivo existente inteiro (create_file só é permitido para arquivos novos ou com até 60 linhas).
 - Se uma substituição falhar, leia o trecho atual com read_file e tente de novo.
 - Crie vários arquivos pequenos e bem organizados. Não repita o código dos arquivos na resposta de texto.
+- ARQUIVOS GRANDES (ex.: HTML salvo do navegador com 150 KB+): NUNCA leia o arquivo inteiro nem o recrie com create_file — isso estoura o limite de tokens. Para mover/copiar use move_or_copy_file; para remover links externos use clean_external_links (rode antes com dry_run=true para ver os domínios); para ajustes pontuais use search_in_files + read_file com start_line/end_line + replace_in_file. Para .zip use extract_zip.
+- Anexos do chat chegam como "[ANEXOS ...]" com caminho e resumo: o conteúdo NÃO está na mensagem, ele já está salvo no projeto naquele caminho.
 - Arquivos enviados pelo usuário aparecem no mapa com um resumo; leia trechos quando precisar de detalhes. Imagens enviadas podem ser usadas pelo caminho (ex.: import logo from './assets/logo.png' ou '/logo.png' se estiver em frontend/public).
 Ao final, responda em português com um resumo curto (3-6 linhas) do que foi feito e próximos passos."""
 
@@ -42,18 +48,110 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {"directory": {"type": "string", "description": "Pasta, ex: frontend/src. Vazio = tudo."}}}}},
     {"type": "function", "function": {"name": "read_file", "description": "Lê um arquivo inteiro ou um intervalo de linhas (numeradas a partir de 1).",
         "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "start_line": {"type": "integer"}, "end_line": {"type": "integer"}}, "required": ["path"]}}},
-    {"type": "function", "function": {"name": "search_files", "description": "Busca um texto (sem diferenciar maiúsculas) nos arquivos. Retorna caminho:linha: trecho.",
-        "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "path_glob": {"type": "string", "description": "Filtro opcional, ex: frontend/src/*.jsx"}}, "required": ["query"]}}},
+    {"type": "function", "function": {"name": "search_in_files", "description": "Busca global de texto ou regex em todos os arquivos de texto do projeto. Retorna arquivo:linha:coluna e o trecho, sem ler arquivos inteiros.",
+        "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "regex": {"type": "boolean", "description": "Tratar query como regex Python (padrão false)"},
+                       "case_sensitive": {"type": "boolean"}, "path_glob": {"type": "string", "description": "Filtro opcional, ex: frontend/src/**/*.jsx"},
+                       "context": {"type": "integer", "description": "Linhas de contexto antes/depois (0-3)"}, "max_results": {"type": "integer"}}, "required": ["query"]}}},
     {"type": "function", "function": {"name": "replace_in_file", "description": "Substitui um trecho exato e único de um arquivo existente por um novo trecho.",
         "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["path", "old_text", "new_text"]}}},
     {"type": "function", "function": {"name": "create_file", "description": "Cria um arquivo novo (ou reescreve um arquivo existente de até 60 linhas).",
         "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
     {"type": "function", "function": {"name": "delete_file", "description": "Apaga um arquivo do projeto.",
         "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
+    {"type": "function", "function": {"name": "move_or_copy_file", "description": "Move ou copia um arquivo de QUALQUER tamanho (texto, imagem, pdf, zip) direto no servidor, sem passar o conteúdo pela IA. Se dest terminar com '/', mantém o nome do arquivo.",
+        "parameters": {"type": "object", "properties": {"source": {"type": "string"}, "dest": {"type": "string", "description": "Ex.: frontend/public/pagina.html ou frontend/public/"},
+                       "mode": {"type": "string", "enum": ["move", "copy"], "description": "Padrão: copy"}, "overwrite": {"type": "boolean"}}, "required": ["source", "dest"]}}},
+    {"type": "function", "function": {"name": "clean_external_links", "description": "Remove links externos (href/src/action/srcset de outros domínios) de um HTML direto no servidor, preservando todo o resto do HTML/CSS byte a byte. Links <a> viram '#', scripts externos são removidos, imagens/iframes externos ficam vazios. Use dry_run=true para só listar os domínios.",
+        "parameters": {"type": "object", "properties": {"source": {"type": "string"}, "dest": {"type": "string", "description": "Opcional; padrão = sobrescrever source"},
+                       "keep_domains": {"type": "array", "items": {"type": "string"}, "description": "Domínios a manter, ex.: fonts.googleapis.com"},
+                       "keep_stylesheets": {"type": "boolean", "description": "Manter <link rel=stylesheet> externos (padrão true)"},
+                       "dry_run": {"type": "boolean"}}, "required": ["source"]}}},
+    {"type": "function", "function": {"name": "extract_zip", "description": "Descompacta um .zip do projeto numa pasta, direto no servidor (ignora node_modules, build, .git e arquivos > 5 MB).",
+        "parameters": {"type": "object", "properties": {"source": {"type": "string"}, "dest_dir": {"type": "string", "description": "Pasta destino, ex.: uploads/site"}}, "required": ["source", "dest_dir"]}}},
 ]
 
+LINK_ATTR = re.compile(r'(\s(?:href|src|action|poster|data-src|srcset)\s*=\s*)(["\'])(.*?)\2', re.I | re.S)
+TAG_RE = re.compile(r'<([a-zA-Z][\w-]*)(\s(?:[^<>"\']|"[^"]*"|\'[^\']*\')*)?/?>', re.S)
+EXT_SCRIPT = re.compile(r'<script\b[^>]*?\ssrc\s*=\s*(["\'])((?:https?:)?//[^"\']+)\1[^>]*>\s*</script\s*>', re.I | re.S)
 
-TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
+
+def _host(url: str):
+    u = url.strip()
+    if not re.match(r'^(?:https?:)?//', u, re.I):
+        return None
+    return (urlparse(u if not u.startswith("//") else "http:" + u).hostname or "").lower() or None
+
+
+def _kept(host: str, keep: list) -> bool:
+    return any(host == k or host.endswith("." + k) for k in keep)
+
+
+def strip_external(html: str, keep: list, keep_styles: bool):
+    stats, domains = {"links": 0, "scripts": 0, "media": 0, "link_tags": 0}, {}
+
+    def ext(url):
+        h = _host(url)
+        if h and not _kept(h, keep):
+            domains[h] = domains.get(h, 0) + 1
+            return True
+        return False
+
+    def drop_script(m):
+        if ext(m.group(2)):
+            stats["scripts"] += 1
+            return ""
+        return m.group(0)
+    out = EXT_SCRIPT.sub(drop_script, html)
+
+    def fix_tag(m):
+        tag, attrs = m.group(1).lower(), m.group(2) or ""
+        if not LINK_ATTR.search(attrs):
+            return m.group(0)
+        if tag == "link":
+            href = re.search(r'\shref\s*=\s*(["\'])(.*?)\1', attrs, re.I | re.S)
+            rel = (re.search(r'\srel\s*=\s*(["\'])(.*?)\1', attrs, re.I | re.S) or [None, None, ""])[2].lower()
+            if href and _host(href.group(2)):
+                if keep_styles and ("stylesheet" in rel or "icon" in rel):
+                    return m.group(0)
+                if ext(href.group(2)):
+                    stats["link_tags"] += 1
+                    return ""
+            return m.group(0)
+
+        def fix_attr(a):
+            name = a.group(1).strip().split("=")[0].strip().lower()
+            val = a.group(3)
+            if name == "srcset":
+                if any(ext(part.strip().split(" ")[0]) for part in val.split(",") if part.strip()):
+                    stats["media"] += 1
+                    return f"{a.group(1)}{a.group(2)}{a.group(2)}"
+                return a.group(0)
+            if not ext(val):
+                return a.group(0)
+            if tag in ("a", "area", "form") or name == "action":
+                stats["links"] += 1
+                return f"{a.group(1)}{a.group(2)}#{a.group(2)}"
+            stats["media"] += 1
+            return f"{a.group(1)}{a.group(2)}{'about:blank' if tag == 'iframe' else ''}{a.group(2)}"
+        new_attrs = LINK_ATTR.sub(fix_attr, attrs)
+        return m.group(0).replace(attrs, new_attrs, 1) if new_attrs != attrs else m.group(0)
+    out = TAG_RE.sub(fix_tag, out)
+    return out, stats, domains
+
+
+def attachments_note(atts: list) -> str:
+    if not atts:
+        return ""
+    lines = [f"- {a['path']} ({a['kind']}, {round((a.get('size') or 0) / 1024, 1)} KB){': ' + a['summary'] if a.get('summary') else ''}" for a in atts]
+    return ("\n\n[ANEXOS — já salvos no projeto nestes caminhos; o conteúdo NÃO está colado aqui. "
+            "Use read_file por trechos, search_in_files, move_or_copy_file, clean_external_links ou extract_zip]\n" + "\n".join(lines))
+
+
+READ_BUDGET = 18000
+LINE_CAP = 2000
+
+
+TOOL_NAMES = {t["function"]["name"] for t in TOOLS} | {"search_files"}
 
 
 def clean_path(p: str) -> str:
@@ -92,9 +190,162 @@ class Agent:
         self.cost = 0.0
         self.tokens = 0
         self.unknown_streak = 0
+        self.warnings: list = []
 
     async def emit(self, event: dict):
         await self.q.put(event)
+
+    async def warn(self, message: str):
+        if message not in self.warnings:
+            self.warnings.append(message)
+        await self.emit({"type": "warning", "message": message})
+
+    async def _light_card(self, path, op, added, removed, note):
+        card = {"path": path, "op": op, "added": added, "removed": removed, "diff": note}
+        self.change_cards.append(card)
+        await self.emit({"type": "change", **card})
+
+    async def _search(self, args):
+        query = args.get("query") or ""
+        if not query:
+            return "ERRO: query vazia."
+        flags = 0 if args.get("case_sensitive") else re.I
+        try:
+            rx = re.compile(query if args.get("regex") else re.escape(query), flags)
+        except re.error as e:
+            return f"ERRO: regex inválida ({e})."
+        glob = args.get("path_glob")
+        ctx = max(0, min(3, int(args.get("context") or 0)))
+        limit = max(1, min(200, int(args.get("max_results") or 80)))
+        out, hits, files_hit = [], 0, set()
+        async for f in db.files.find({"project_id": self.pid, "kind": "text"}, {"_id": 0, "path": 1, "content": 1}).sort("path", 1):
+            if glob and not (fnmatch.fnmatch(f["path"], glob) or fnmatch.fnmatch(f["path"], glob.replace("**/", ""))):
+                continue
+            lines = f["content"].split("\n")
+            for i, line in enumerate(lines, 1):
+                m = rx.search(line)
+                if not m:
+                    continue
+                hits += 1
+                files_hit.add(f["path"])
+                start = max(0, m.start() - 60)
+                snippet = ("…" if start else "") + line[start:m.end() + 100].strip()
+                out.append(f"{f['path']}:{i}:{m.start() + 1}: {snippet[:220]}")
+                for j in range(max(1, i - ctx), min(len(lines), i + ctx) + 1):
+                    if j != i:
+                        out.append(f"   {j}| {lines[j - 1].strip()[:160]}")
+                if hits >= limit:
+                    return "\n".join(out) + f"\n(limite de {limit} resultados — refine a busca ou use path_glob)"
+        return (f"{hits} resultado(s) em {len(files_hit)} arquivo(s):\n" + "\n".join(out)) if out else "Nenhum resultado."
+
+    async def _read_pdf(self, f, args):
+        data, _ = await run_in_threadpool(get_object, f["storage_path"])
+
+        def extract():
+            from pypdf import PdfReader
+            r = PdfReader(io.BytesIO(data))
+            s = max(1, int(args.get("start_line") or 1))
+            e = min(len(r.pages), int(args.get("end_line") or len(r.pages)))
+            out, used, last = [], 0, s - 1
+            for i in range(s, e + 1):
+                t = (r.pages[i - 1].extract_text() or "").strip()
+                if used + len(t) > READ_BUDGET and out:
+                    break
+                out.append(f"--- página {i} ---\n{t[:READ_BUDGET]}")
+                used += len(t)
+                last = i
+            return len(r.pages), last, "\n".join(out)
+        total, last, body = await run_in_threadpool(extract)
+        more = f"\n[continue com start_line={last + 1}]" if last < total else ""
+        return f"{f['path']} (PDF, páginas até {last} de {total}; start_line/end_line = páginas)\n{body}{more}"
+
+    async def _move_copy(self, args):
+        src = clean_path(args["source"])
+        raw_dest = (args.get("dest") or "").strip()
+        dest = clean_path(raw_dest)
+        mode = (args.get("mode") or "copy").lower()
+        if mode not in ("move", "copy"):
+            return "ERRO: mode deve ser 'move' ou 'copy'."
+        f = await self._get(src)
+        if not f:
+            return f"ERRO: '{src}' não existe."
+        name = src.split("/")[-1]
+        is_dir = raw_dest.endswith("/") or not dest or await db.files.find_one({"project_id": self.pid, "path": {"$regex": "^" + re.escape(dest) + "/"}}, {"_id": 1})
+        if is_dir:
+            dest = f"{dest}/{name}" if dest else name
+        if dest == src:
+            return "ERRO: origem e destino são iguais."
+        existing = await self._get(dest)
+        if existing and not args.get("overwrite"):
+            return f"ERRO: '{dest}' já existe. Use overwrite=true para substituir."
+        doc = {k: v for k, v in f.items() if k not in ("path", "updated_at")}
+        doc.update({"path": dest, "updated_at": now()})
+        if doc["kind"] == "text" and doc.get("uploaded"):
+            doc["summary"] = summarize_text(dest, doc["content"])
+        await db.files.update_one({"project_id": self.pid, "path": dest}, {"$set": doc}, upsert=True)
+        self._track(dest, existing, doc)
+        n = (doc.get("content") or "").count("\n") + 1 if doc["kind"] == "text" else 0
+        kb = round((doc.get("size") or 0) / 1024, 1)
+        await self._light_card(dest, "edit" if existing else "create", n, 0, f"({'movido' if mode == 'move' else 'copiado'} de {src}: {kb} KB — conteúdo idêntico, diff omitido)")
+        if mode == "move":
+            await db.files.delete_one({"project_id": self.pid, "path": src})
+            self._track(src, f, None)
+            await self._light_card(src, "delete", 0, n, f"(movido para {dest})")
+        return f"OK: {src} {'movido' if mode == 'move' else 'copiado'} para {dest} ({kb} KB, sem passar pela IA)."
+
+    async def _clean_links(self, args):
+        src = clean_path(args["source"])
+        dest = clean_path(args.get("dest") or "") or src
+        f = await self._get(src)
+        if not f or f["kind"] != "text":
+            return f"ERRO: '{src}' não existe ou não é texto."
+        keep = [k.strip().lower().lstrip(".") for k in (args.get("keep_domains") or []) if k and k.strip()]
+        out, stats, domains = await run_in_threadpool(strip_external, f["content"], keep, args.get("keep_stylesheets", True) is not False)
+        top = ", ".join(f"{d} ({c})" for d, c in sorted(domains.items(), key=lambda x: -x[1])[:30]) or "nenhum"
+        if args.get("dry_run"):
+            return f"DRY RUN {src}: domínios externos encontrados: {top}. Nada foi alterado."
+        changed = sum(stats.values())
+        if not changed and dest == src:
+            return f"OK: nenhum link externo encontrado em {src}."
+        before = await self._get(dest) if dest != src else f
+        await self._write(dest, before, out)
+        await self._light_card(dest, "edit" if before else "create", changed, changed,
+                               f"(links externos limpos no servidor: {stats['links']} links → '#', {stats['scripts']} scripts removidos, "
+                               f"{stats['media']} mídias esvaziadas, {stats['link_tags']} <link> removidos; {len(f['content'])//1024} KB → {len(out)//1024} KB. Domínios: {top})")
+        return (f"OK: {dest} salvo. {stats['links']} links viraram '#', {stats['scripts']} scripts externos removidos, "
+                f"{stats['media']} src/srcset esvaziados, {stats['link_tags']} <link> removidos. Domínios: {top}. "
+                f"Tamanho {len(f['content'])} → {len(out)} bytes; o resto do HTML/CSS ficou idêntico.")
+
+    async def _extract_zip(self, args):
+        from github_sync import _extract
+        src = clean_path(args["source"])
+        base = clean_path(args.get("dest_dir") or "")
+        f = await self._get(src)
+        if not f or f.get("content_type") != "application/zip":
+            return f"ERRO: '{src}' não é um .zip do projeto."
+        data, _ = await run_in_threadpool(get_object, f["storage_path"])
+        texts, images, skipped = await run_in_threadpool(_extract, data, False)
+        n = 0
+        for path, text, size in texts:
+            p = f"{base}/{path}" if base else path
+            before = await self._get(p)
+            doc = {"project_id": self.pid, "path": p, "kind": "text", "content": text, "size": size, "uploaded": True,
+                   "summary": summarize_text(p, text), "updated_at": now()}
+            await db.files.update_one({"project_id": self.pid, "path": p}, {"$set": doc}, upsert=True)
+            self._track(p, before, doc)
+            n += 1
+        for path, blob, ctype in images:
+            p = f"{base}/{path}" if base else path
+            before = await self._get(p)
+            sp = await store_binary(self.member["user_id"], p, blob, ctype)
+            doc = {"project_id": self.pid, "path": p, "kind": "binary", "storage_path": sp, "content_type": ctype,
+                   "size": len(blob), "uploaded": True, "summary": f"Imagem {ctype}, {len(blob)//1024} KB.", "updated_at": now()}
+            await db.files.update_one({"project_id": self.pid, "path": p}, {"$set": doc}, upsert=True)
+            self._track(p, before, doc)
+            n += 1
+        await self._light_card(base or "/", "create", n, 0, f"({n} arquivos extraídos de {src}; {len(skipped)} ignorados)")
+        names = ", ".join(p for p, _, _ in texts[:20])
+        return f"OK: {n} arquivos extraídos de {src} para '{base or '/'}' ({len(skipped)} ignorados). Ex.: {names}"
 
     async def _get(self, path):
         return await db.files.find_one({"project_id": self.pid, "path": path}, {"_id": 0})
@@ -134,27 +385,28 @@ class Agent:
                 if not f:
                     return f"ERRO: arquivo '{path}' não existe."
                 if f["kind"] != "text":
+                    if f.get("content_type") == "application/pdf":
+                        return await self._read_pdf(f, args)
                     return f"Arquivo binário. {f.get('summary') or ''}"
                 lines = f["content"].split("\n")
                 s = max(1, int(args.get("start_line") or 1))
                 e = min(len(lines), int(args.get("end_line") or len(lines)))
                 if e - s > 600:
                     e = s + 600
-                body = "\n".join(f"{i}: {lines[i - 1]}" for i in range(s, e + 1))
-                return f"{path} (linhas {s}-{e} de {len(lines)})\n{body}"
-            if name == "search_files":
-                query = (args.get("query") or "").lower()
-                glob = args.get("path_glob")
-                out = []
-                async for f in db.files.find({"project_id": self.pid, "kind": "text"}, {"_id": 0, "path": 1, "content": 1}):
-                    if glob and not fnmatch.fnmatch(f["path"], glob):
-                        continue
-                    for i, line in enumerate(f["content"].split("\n"), 1):
-                        if query in line.lower():
-                            out.append(f"{f['path']}:{i}: {line.strip()[:160]}")
-                            if len(out) >= 80:
-                                return "\n".join(out) + "\n(limite de 80 resultados)"
-                return "\n".join(out) or "Nenhum resultado."
+                out, used, last = [], 0, s - 1
+                for i in range(s, e + 1):
+                    ln = lines[i - 1]
+                    if len(ln) > LINE_CAP:
+                        ln = ln[:LINE_CAP] + f" …[linha cortada: {len(lines[i - 1])} caracteres; use search_in_files para achar trechos]"
+                    if used + len(ln) > READ_BUDGET and out:
+                        break
+                    out.append(f"{i}: {ln}")
+                    used += len(ln)
+                    last = i
+                more = f"\n[parado na linha {last} para não estourar tokens; continue com start_line={last + 1}]" if last < e else ""
+                return f"{path} (linhas {s}-{last} de {len(lines)})\n" + "\n".join(out) + more
+            if name in ("search_in_files", "search_files"):
+                return await self._search(args)
             if name == "replace_in_file":
                 path = clean_path(args["path"])
                 f = await self._get(path)
@@ -192,26 +444,48 @@ class Agent:
                 self._track(path, f, None)
                 await self._card(path, "delete", f.get("content") if f["kind"] == "text" else "", "")
                 return f"OK: {path} apagado."
+            if name == "move_or_copy_file":
+                return await self._move_copy(args)
+            if name == "clean_external_links":
+                return await self._clean_links(args)
+            if name == "extract_zip":
+                return await self._extract_zip(args)
             return f"ERRO: ferramenta desconhecida {name}"
         except (KeyError, ValueError) as e:
             return f"ERRO: argumentos inválidos ({e})."
 
     async def build_messages(self, prompt: str) -> list:
-        history = await db.messages.find({"project_id": self.pid}, {"_id": 0}).sort("created_at", -1).to_list(16)
-        msgs = [{"role": "system", "content": SYSTEM_PROMPT + "\n\nMAPA ATUAL DO PROJETO:\n" + await project_map(self.pid)}]
-        for m in reversed(history):
+        history = list(reversed(await db.messages.find({"project_id": self.pid}, {"_id": 0}).sort("created_at", -1).to_list(16)))
+        p = await db.projects.find_one({"id": self.pid}, {"_id": 0, "env_enc": 1}) or {}
+        env_names = []
+        if p.get("env_enc"):
+            try:
+                env_names = list(json.loads(decrypt(p["env_enc"])))
+            except Exception:
+                env_names = []
+        env_note = ("\n\nVARIÁVEIS DE AMBIENTE DO PROJETO (valores definidos pelo usuário no painel .env, injetados na prévia como process.env.NOME; "
+                    "use-as pelo nome, nunca escreva os valores no código): " + ", ".join(env_names)) if env_names else ""
+        msgs = [{"role": "system", "content": SYSTEM_PROMPT + env_note + "\n\nMAPA ATUAL DO PROJETO:\n" + await project_map(self.pid)}]
+        current = history and history[-1]["role"] == "user" and history[-1].get("content") == prompt
+        for i, m in enumerate(history):
             content = m.get("content") or ""
             if m["role"] == "assistant" and m.get("changes"):
                 content += "\n[Alterações: " + ", ".join(f"{c['path']} (+{c['added']}/-{c['removed']})" for c in m["changes"][:40]) + "]"
+            is_last = current and i == len(history) - 1
+            if not is_last:
+                content = content[:6000]
+            if m["role"] == "user":
+                content += attachments_note(m.get("attachments") or [])
             if content.strip():
-                msgs.append({"role": m["role"], "content": content[:6000]})
-        msgs.append({"role": "user", "content": prompt})
+                msgs.append({"role": m["role"], "content": content})
+        if not current:
+            msgs.append({"role": "user", "content": prompt})
         return msgs
 
     async def call_model(self, client, headers, model, messages):
         payload = {"model": model, "messages": messages, "tools": TOOLS, "tool_choice": "auto",
                    "stream": True, "max_tokens": 8000, "temperature": 0.2}
-        text, calls, usage, gen_id = "", {}, None, None
+        text, calls, usage, gen_id, finish = "", {}, None, None, None
         async with client.stream("POST", f"{OPENROUTER_BASE}/chat/completions", headers=headers, json=payload) as r:
             if r.is_error:
                 body = (await r.aread()).decode(errors="replace")
@@ -235,7 +509,9 @@ class Agent:
                 gen_id = chunk.get("id", gen_id)
                 if chunk.get("usage"):
                     usage = chunk["usage"]
-                delta = ((chunk.get("choices") or [{}])[0].get("delta") or {})
+                choice = (chunk.get("choices") or [{}])[0]
+                finish = choice.get("finish_reason") or finish
+                delta = choice.get("delta") or {}
                 if delta.get("content"):
                     text += delta["content"]
                     await self.emit({"type": "token", "text": delta["content"]})
@@ -248,7 +524,7 @@ class Agent:
                         slot["name"] += fn["name"]
                     if fn.get("arguments"):
                         slot["arguments"] += fn["arguments"]
-        return text, [calls[i] for i in sorted(calls)], usage, gen_id
+        return text, [calls[i] for i in sorted(calls)], usage, gen_id, finish
 
     async def record_usage(self, model, usage, gen_id, key_source):
         if not usage:
@@ -269,10 +545,13 @@ class Agent:
             messages = await self.build_messages(prompt)
             async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20, read=180, write=60, pool=20)) as client:
                 for _ in range(MAX_STEPS):
-                    text, calls, usage, gen_id = await self.call_model(client, headers, model, messages)
+                    text, calls, usage, gen_id, finish = await self.call_model(client, headers, model, messages)
                     await self.record_usage(model, usage, gen_id, key_source)
                     if text:
                         self.text += text + "\n"
+                    if finish == "length":
+                        await self.warn("A resposta do modelo foi cortada no limite de tokens. "
+                                        + ("Pedi para ele refazer em partes menores." if calls else "Envie 'continue' para ele seguir."))
                     if not calls:
                         break
                     messages.append({"role": "assistant", "content": text or None, "tool_calls": [
@@ -283,8 +562,9 @@ class Agent:
                         try:
                             args = json.loads(c["arguments"] or "{}")
                         except json.JSONDecodeError:
-                            args, result = None, "ERRO: argumentos JSON inválidos (talvez a resposta foi cortada). Envie arquivos menores ou edite por trechos."
-                        await self.emit({"type": "tool", "name": c["name"], "path": (args or {}).get("path") or (args or {}).get("directory") or (args or {}).get("query")})
+                            args, result = None, ("ERRO: argumentos JSON inválidos — sua resposta foi cortada pelo limite de tokens. Nada foi salvo. "
+                                                  "Não envie arquivos grandes inteiros: use replace_in_file com trechos pequenos, ou move_or_copy_file / clean_external_links para arquivos grandes.")
+                        await self.emit({"type": "tool", "name": c["name"], "path": (args or {}).get("path") or (args or {}).get("source") or (args or {}).get("directory") or (args or {}).get("query")})
                         if c["name"] not in TOOL_NAMES:
                             self.unknown_streak += 1
                             result = (f"ERRO: a ferramenta '{c['name']}' não existe. Você NÃO tem terminal/shell. "
@@ -308,17 +588,31 @@ class Agent:
                     self.text += "\n(Limite de passos atingido — envie 'continue' para seguir.)"
         except Exception as e:
             logger.exception("agent error")
-            error = str(e)
+            error = friendly_error(e)
             await self.emit({"type": "error", "message": error})
         finally:
+            if not error and not self.text.strip() and not self.change_cards:
+                error = "O modelo não retornou nenhuma resposta (pode ter batido no limite de tokens). Tente de novo, divida o pedido ou troque de modelo."
             version = await record_version(self.pid, prompt, self.changes, "ai")
             msg = {"id": new_id(), "project_id": self.pid, "role": "assistant", "content": self.text.strip(),
-                   "changes": self.change_cards, "error": error, "model": model, "cost": self.cost,
+                   "changes": self.change_cards, "error": error, "warnings": self.warnings, "model": model, "cost": self.cost,
                    "tokens": self.tokens, "version": version, "created_at": now()}
             await db.messages.insert_one(msg)
             msg.pop("_id", None)
             await self.emit({"type": "done", "message": msg})
             await self.q.put(None)
+
+
+def friendly_error(e: Exception) -> str:
+    msg = str(e)
+    low = msg.lower()
+    if "context" in low and ("length" in low or "window" in low or "too long" in low or "maximum" in low):
+        return f"O pedido ficou maior que o limite de contexto do modelo. Divida o pedido ou use um modelo com mais contexto. ({msg[:200]})"
+    if isinstance(e, httpx.TimeoutException):
+        return "A OpenRouter demorou demais para responder (tempo esgotado). Tente de novo ou peça uma mudança menor."
+    if "402" in msg or "credits" in low:
+        return f"Sem saldo na OpenRouter para este modelo. ({msg[:200]})"
+    return msg or e.__class__.__name__
 
 
 async def resolve_key(member: dict) -> tuple[str, str]:

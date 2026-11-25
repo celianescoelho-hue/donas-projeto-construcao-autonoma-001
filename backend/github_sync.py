@@ -62,13 +62,14 @@ def _clean(path: str):
     return None if ".." in parts or not parts else "/".join(parts)
 
 
-def _extract(content: bytes):
+def _extract(content: bytes, strip_root: bool = True):
     zf = zipfile.ZipFile(io.BytesIO(content))
     texts, images, skipped = [], [], []
     for info in zf.infolist():
         if info.is_dir():
             continue
-        path = _clean(info.filename.split("/", 1)[1] if "/" in info.filename else info.filename)
+        name = info.filename.split("/", 1)[1] if strip_root and "/" in info.filename else info.filename
+        path = _clean(name)
         if not path or excluded(path):
             continue
         if info.file_size > MAX_FILE:

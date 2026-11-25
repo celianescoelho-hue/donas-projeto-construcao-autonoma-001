@@ -28,7 +28,7 @@ except ModuleNotFoundError:
 
 from core import (db, client, now, new_id, encrypt, decrypt, current_member, require_role, get_settings, get_project,
                   record_version, file_snapshot, rate_limit, summarize_text, summarize_image, store_binary, get_object, init_storage,
-                  effective_role, ROLES, RANK, IN_ENV, RETIRED_ROLES, IMAGE_TYPES, OPENROUTER_BASE, logger)
+                  effective_role, ROLES, RANK, IN_ENV, RETIRED_ROLES, IMAGE_TYPES, OPENROUTER_BASE, logger, DOC_TYPES, summarize_pdf, summarize_zip)
 from agent import Agent, resolve_key, clean_path
 import github_sync as ghs
 
@@ -158,6 +158,7 @@ async def list_projects(member: dict = Depends(current_member)):
         p["file_count"] = await db.files.count_documents({"project_id": p["id"]})
         if p.get("github"):
             p["github"] = {k: v for k, v in p["github"].items() if k != "skipped_paths"}
+        p.pop("env_enc", None)
     return items
 
 
@@ -207,7 +208,50 @@ async def get_project_full(pid: str, member: dict = Depends(current_member)):
     files = await db.files.find({"project_id": pid}, {"_id": 0}).sort("path", 1).to_list(5000)
     if p.get("github"):
         p["github"] = {k: v for k, v in p["github"].items() if k != "skipped_paths"}
+    p["env_keys"] = list(load_env(p))
+    p.pop("env_enc", None)
     return {"project": p, "files": [public_file(f) for f in files]}
+
+
+ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,79}$")
+
+
+def load_env(p: dict) -> dict:
+    if not p.get("env_enc"):
+        return {}
+    try:
+        return json.loads(decrypt(p["env_enc"]))
+    except Exception:
+        return {}
+
+
+class EnvVar(BaseModel):
+    key: str = Field(min_length=1, max_length=80)
+    value: str = Field(default="", max_length=4000)
+
+
+class EnvIn(BaseModel):
+    vars: List[EnvVar] = Field(default_factory=list, max_length=60)
+
+
+@api.get("/projects/{pid}/env")
+async def get_env(pid: str, member: dict = Depends(current_member)):
+    p = await get_project(pid, member)
+    return {"vars": [{"key": k, "value": v} for k, v in load_env(p).items()]}
+
+
+@api.put("/projects/{pid}/env")
+async def put_env(pid: str, body: EnvIn, member: dict = Depends(current_member)):
+    rate_limit(f"env:{member['user_id']}", 30, 60)
+    await get_project(pid, member)
+    env = {}
+    for v in body.vars:
+        k = v.key.strip()
+        if not ENV_KEY.match(k):
+            raise HTTPException(status_code=400, detail=f"Nome inválido: {k}. Use letras, números e _ (ex.: REACT_APP_API_URL).")
+        env[k] = v.value
+    await db.projects.update_one({"id": pid}, {"$set": {"env_enc": encrypt(json.dumps(env)), "updated_at": now()}})
+    return {"vars": [{"key": k, "value": v} for k, v in env.items()]}
 
 
 class FileIn(BaseModel):
@@ -245,7 +289,7 @@ async def delete_file(pid: str, path: str = Query(...), member: dict = Depends(c
     return {"ok": True}
 
 
-TEXT_UPLOAD = {"html", "htm", "css", "js", "jsx", "ts", "tsx", "json", "md", "txt", "py", "svg"}
+TEXT_UPLOAD = {"html", "htm", "css", "js", "jsx", "ts", "tsx", "mjs", "json", "md", "txt", "py", "svg", "xml", "csv", "yml", "yaml"}
 MAX_UPLOAD = 10 * 1024 * 1024
 
 
@@ -277,6 +321,11 @@ async def upload(pid: str, files: List[UploadFile] = File(...), directory: str =
             sp = await store_binary(member["user_id"], path, data, IMAGE_TYPES[ext])
             doc = {"project_id": pid, "path": path, "kind": "binary", "storage_path": sp, "content_type": IMAGE_TYPES[ext],
                    "size": len(data), "uploaded": True, "summary": summarize_image(path, data, IMAGE_TYPES[ext]), "updated_at": now()}
+        elif ext in DOC_TYPES:
+            sp = await store_binary(member["user_id"], path, data, DOC_TYPES[ext])
+            summary = summarize_pdf(data) if ext == "pdf" else summarize_zip(data)
+            doc = {"project_id": pid, "path": path, "kind": "binary", "storage_path": sp, "content_type": DOC_TYPES[ext],
+                   "size": len(data), "uploaded": True, "summary": summary, "updated_at": now()}
         else:
             errors.append(f"{name}: tipo não suportado")
             continue
@@ -323,6 +372,7 @@ async def messages(pid: str, member: dict = Depends(current_member)):
 class ChatIn(BaseModel):
     prompt: str = Field(min_length=1, max_length=30000)
     model: Optional[str] = None
+    attachments: List[str] = Field(default_factory=list, max_length=20)
 
 
 RUNNING: dict = {}
@@ -355,8 +405,14 @@ async def _start_chat(pid: str, project: dict, body: ChatIn, member: dict):
         api_key, source = await resolve_key(member)
     except ValueError as e:
         raise HTTPException(status_code=402, detail=str(e))
+    attachments = []
+    for raw in body.attachments:
+        f = await db.files.find_one({"project_id": pid, "path": clean_path(raw)}, {"_id": 0, "content": 0})
+        if f:
+            attachments.append({"path": f["path"], "kind": f["kind"], "size": f.get("size", 0),
+                                "content_type": f.get("content_type"), "summary": f.get("summary")})
     await db.messages.insert_one({"id": new_id(), "project_id": pid, "role": "user", "content": body.prompt,
-                                  "model": model, "created_at": now()})
+                                  "attachments": attachments, "model": model, "created_at": now()})
     if project.get("model") != model:
         await db.projects.update_one({"id": pid}, {"$set": {"model": model}})
     queue: asyncio.Queue = asyncio.Queue()
@@ -404,12 +460,15 @@ async def apply_snapshot(pid: str, path: str, snap: dict | None):
 
 
 @api.post("/projects/{pid}/versions/{vid}/restore")
-async def restore(pid: str, vid: str, member: dict = Depends(current_member)):
+async def restore(pid: str, vid: str, mode: str = Query("after", pattern="^(after|before)$"), member: dict = Depends(current_member)):
     await get_project(pid, member)
+    if RUNNING.get(pid):
+        raise HTTPException(status_code=409, detail="A IA está trabalhando neste projeto. Aguarde para restaurar.")
     target = await db.versions.find_one({"id": vid, "project_id": pid}, {"_id": 0})
     if not target:
         raise HTTPException(status_code=404, detail="Versão não encontrada")
-    newer = await db.versions.find({"project_id": pid, "number": {"$gt": target["number"]}}, {"_id": 0}).sort("number", -1).to_list(1000)
+    cond = {"$gte" if mode == "before" else "$gt": target["number"]}
+    newer = await db.versions.find({"project_id": pid, "number": cond}, {"_id": 0}).sort("number", -1).to_list(1000)
     paths = {c["path"] for v in newer for c in v["changes"]}
     current = {p: file_snapshot(await db.files.find_one({"project_id": pid, "path": p}, {"_id": 0})) for p in paths}
     for v in newer:
@@ -417,7 +476,8 @@ async def restore(pid: str, vid: str, member: dict = Depends(current_member)):
             await apply_snapshot(pid, c["path"], c["before"])
     final = {p: file_snapshot(await db.files.find_one({"project_id": pid, "path": p}, {"_id": 0})) for p in paths}
     changes = {p: {"before": current[p], "after": final[p]} for p in paths if current[p] != final[p]}
-    await record_version(pid, f"Restaurado para a versão {target['number']}", changes, "restore")
+    label = f"Desfeito: voltou para antes da versão {target['number']}" if mode == "before" else f"Restaurado para a versão {target['number']}"
+    await record_version(pid, label, changes, "restore")
     return {"ok": True, "changed": len(changes)}
 
 

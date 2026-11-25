@@ -11,7 +11,7 @@ async def main():
 
     async def fake(client, headers, model, messages):
         calls["n"] += 1
-        return "", [{"id": f"c{calls['n']}", "name": "run_shell_command", "arguments": '{"command":"ls"}'}], None, None
+        return "", [{"id": f"c{calls['n']}", "name": "run_shell_command", "arguments": '{"command":"ls"}'}], None, None, None
     a.call_model = fake
     await a.run("teste", "x", "k", "platform")
     print("model calls:", calls["n"])

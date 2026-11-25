@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { History, RotateCcw, Loader2 } from "lucide-react";
+import { History, RotateCcw, Undo2, Loader2 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { errMsg } from "@/lib/api";
@@ -15,11 +15,11 @@ export default function VersionsSheet({ open, onOpenChange, api, projectId, onRe
     setItems(null);
     api.get(`/projects/${projectId}/versions`).then((r) => setItems(r.data)).catch((e) => toast.error(errMsg(e)));
   }, [open, api, projectId]);
-  const restore = async (v) => {
-    setBusy(v.id);
+  const restore = async (v, mode = "after") => {
+    setBusy(`${v.id}-${mode}`);
     try {
-      const r = await api.post(`/projects/${projectId}/versions/${v.id}/restore`);
-      toast.success(`Restaurado para a versão ${v.number} (${r.data.changed} arquivos)`);
+      const r = await api.post(`/projects/${projectId}/versions/${v.id}/restore`, null, { params: { mode } });
+      toast.success(mode === "before" ? `Voltou para antes da versão ${v.number} (${r.data.changed} arquivos)` : `Restaurado para a versão ${v.number} (${r.data.changed} arquivos)`);
       onRestored(); onOpenChange(false);
     } catch (e) { toast.error(errMsg(e)); } finally { setBusy(null); }
   };
@@ -28,7 +28,7 @@ export default function VersionsSheet({ open, onOpenChange, api, projectId, onRe
       <SheetContent className="w-[420px] sm:max-w-[420px] overflow-y-auto scroll-thin" data-testid="versions-sheet">
         <SheetHeader>
           <SheetTitle className="flex items-center gap-2"><History className="h-4 w-4 text-primary" />Histórico de versões</SheetTitle>
-          <SheetDescription>Volte o projeto para como estava depois de qualquer versão.</SheetDescription>
+          <SheetDescription>Antes de cada execução da IA, o estado dos arquivos é guardado. Volte para antes ou depois de qualquer versão com 1 clique.</SheetDescription>
         </SheetHeader>
         <div className="mt-6 space-y-2">
           {items === null ? <p className="text-sm text-muted-foreground">Carregando…</p> : items.length === 0 ? <p className="text-sm text-muted-foreground">Nenhuma versão ainda.</p> :
@@ -41,11 +41,16 @@ export default function VersionsSheet({ open, onOpenChange, api, projectId, onRe
                 </div>
                 <p className="text-sm mt-1.5 line-clamp-2">{v.label}</p>
                 <p className="text-[11px] font-mono text-muted-foreground mt-1 truncate">{v.count} arquivo(s): {v.paths.slice(0, 3).join(", ")}</p>
-                {i > 0 && (
-                  <Button size="sm" variant="secondary" className="mt-2 h-7 text-xs" disabled={!!busy} onClick={() => restore(v)} data-testid={`restore-version-${v.number}`}>
-                    {busy === v.id ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <RotateCcw className="h-3 w-3 mr-1" />}Restaurar esta versão
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  <Button size="sm" variant="secondary" className="h-7 text-xs" disabled={!!busy} onClick={() => restore(v, "before")} data-testid={`undo-version-${v.number}`}>
+                    {busy === `${v.id}-before` ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Undo2 className="h-3 w-3 mr-1" />}Voltar para antes
                   </Button>
-                )}
+                  {i > 0 && (
+                    <Button size="sm" variant="ghost" className="h-7 text-xs" disabled={!!busy} onClick={() => restore(v)} data-testid={`restore-version-${v.number}`}>
+                      {busy === `${v.id}-after` ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <RotateCcw className="h-3 w-3 mr-1" />}Restaurar esta versão
+                    </Button>
+                  )}
+                </div>
               </div>
             ))}
         </div>
