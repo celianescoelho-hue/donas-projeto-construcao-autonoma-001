@@ -18,6 +18,10 @@
 - Security: encrypted keys never returned, server-side role checks, rate limits (per-user + per-IP), sandboxed iframe, security headers, secure-codegen rules in the system prompt (bcrypt, JWT, Pydantic, .env).
 - Fixes: unknown-tool guard (stop after 2), no-shell prompt, chat/import locks, atomic version numbers, '..' → 400.
 
+- Chat attachments (clip, drag-and-drop, large pastes → files in uploads/, AI gets path + metadata), PDF/ZIP support; server-side tools move_or_copy_file, clean_external_links, extract_zip; read_file token budget; visible token-limit/failure errors.
+- search_in_files (text/regex, file:line:col), preview error banner + "Corrigir com IA", rollback "Voltar para antes" per version + "Desfazer" on chat messages, per-project .env (encrypted, injected as process.env), Inspect element picker → chat reference (file:line via data-donas-src).
+- Public Link Preview /p/{id}/live (no login, front-end only, toggle in share popover + project settings, QR code, auto-refresh 10s).
+
 ## Backlog
 - P1: run the generated Python backend in an isolated sandbox for a full-stack preview; publish to a public link.
 - P1: GitHub pull requests instead of direct pushes; real-PAT import/push E2E test.

@@ -1,0 +1,29 @@
+{
+  "summary": "Tested the public Link Preview end to end: backend PATCH public_preview and the public preview/asset endpoints (15 pytest cases, all pass), the public page /p/{id}/live without login at 390x800 (render, counter, router links, error state, 10 s polling rebuild), the workspace SharePopover (URL, copy, open in new tab, toggle, QR, hint), ProjectSettingsDialog (rename, public switch, kept in sync with the popover), the Esc fix for inspect mode, and a regression smoke (workspace preview, Desktop/Celular, env dialog). Found and fixed one bug in LivePreview.jsx: once the error screen showed, it stayed stuck after public access was turned back on (or after a short network error) until a file changed.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "LivePreview", "issue": "FIXED by tester. After 'Prévia indisponível' appeared, turning public access back on never brought the preview back, because load() returned early when the stamp had not changed and so never cleared the error. Now setError(null) runs on every successful fetch. Retested: the page recovers in about 10 s.", "selector": "[data-testid='live-preview-error']", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/p/{id}/live", "issues": ["When the project's build fails (for example a missing imported asset), the live page is a blank white screen and the error only shows in the console. Show a small error overlay or message for visitors."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter5_public_preview.py", "/app/backend/tests/iter5_live_setup.py", "/app/test_reports/pytest/iter5_results.xml"],
+  "action_items": [
+    "Optional: show a build-error message on the public live page instead of a blank white screen",
+    "Optional: lighten the 10 s polling by adding a stamp-only endpoint or ETag/If-None-Match. Right now every poll downloads the content of every file."
+  ],
+  "critical_code_review_comments": [
+    "PUBLIC_HIDDEN only covers backend/, .env*, *.py, *.pdf, *.zip and requirements.txt. It meets the spec, but other server-side code is still exposed: a Node backend in server/ or api/, server.js, .npmrc, secrets JSON files. Consider an allowlist (frontend/** plus root index.html/src) instead of a denylist.",
+    "The asset endpoint returns 400 (not 404) for traversal paths like ../x on public projects, because clean_path rejects them. This is acceptable, and the tests accept 400 or 404.",
+    "PATCH and GET responses no longer include env_enc (verified). The iteration-4 leak is fixed."
+  ],
+  "updated_files": ["/app/frontend/src/pages/LivePreview.jsx", "/app/backend/tests/test_iter5_public_preview.py", "/app/backend/tests/iter5_live_setup.py"],
+  "success_rate": {"backend": "100% (15/15)", "frontend": "100% after tester fix (1 bug found and fixed)"},
+  "seed_data_creation": "Created TEST_public_preview (deleted by the pytest fixture) and TEST_live_poll, a copy of 90476221 with its image re-uploaded (deleted at the end). Project 90476221 was only read and is left with public_preview=true.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "The workspace route is /p/{id}. The public page is /p/{id}/live. Run tests/iter5_live_setup.py create|edit|public|delete to make a disposable public copy of 90476221 (the image frontend/src/assets/t.png must be uploaded separately, otherwise the build fails). Verified: the polling rebuild shows within about 9 s; turning public off shows the error within about 10 s; turning it back on recovers in place."
+}

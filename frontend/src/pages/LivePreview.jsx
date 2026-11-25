@@ -30,7 +30,9 @@ export default function LivePreview() {
         const r = await fetch(`${API}/${id}/preview`);
         if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `Erro ${r.status}`);
         const d = await r.json();
-        if (!alive || d.updated_at === stamp.current) return;
+        if (!alive) return;
+        setError(null);
+        if (d.updated_at === stamp.current) return;
         stamp.current = d.updated_at;
         document.title = `${d.name} · Donas`;
         const assets = await loadAssets(id, d.files, cache.current);

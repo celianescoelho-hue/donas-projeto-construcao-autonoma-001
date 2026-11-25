@@ -81,6 +81,7 @@ const errorScript = `<script>
 function show(m){var d=document.getElementById('__donas_err');if(!d){d=document.createElement('pre');d.id='__donas_err';d.style.cssText='position:fixed;left:12px;right:12px;bottom:12px;max-height:45%;overflow:auto;z-index:2147483647;background:#1a0b0b;color:#ff8a8a;border:1px solid #ff4d4d55;border-radius:10px;padding:14px;font:12px/1.5 JetBrains Mono,monospace;white-space:pre-wrap';(document.body||document.documentElement).appendChild(d);}d.textContent+=m+'\\n';}
 function fmt(a){return Array.prototype.map.call(a,function(x){if(x instanceof Error)return x.message;if(typeof x==='object'){try{return JSON.stringify(x)}catch(e){return String(x)}}return String(x)}).join(' ')}
 ['log','info','warn','error','debug'].forEach(function(k){var o=console[k];console[k]=function(){post(k==='debug'?'log':k,fmt(arguments));return o.apply(console,arguments)}});
+window.__donasShow=show;
 window.addEventListener('error',function(e){var m='Erro: '+(e.message||e.error);show(m);post('error',m)});
 window.addEventListener('unhandledrejection',function(e){var m='Erro: '+((e.reason&&e.reason.message)||e.reason);show(m);post('error',m)});
 window.process={env:Object.assign({NODE_ENV:'development'},window.__DONAS_ENV__||{})};
@@ -234,7 +235,7 @@ ${css.map((c) => `<style>${c}</style>`).join("\n")}
 <script>(function(){var mods=JSON.parse(document.getElementById('__donas_modules').textContent),u=[];
 mods.forEach(function(c,i){c=c.replace(/__DONAS_MOD_(\\d+)__/g,function(_,n){return u[+n]});u[i]=URL.createObjectURL(new Blob([c],{type:'text/javascript'}));});
 var e=${JSON.stringify(entryUrl)}.replace(/__DONAS_MOD_(\\d+)__/,function(_,n){return u[+n]});
-import(e).catch(function(err){console.error(err&&err.message||err)});})();</script></body></html>`;
+import(e).catch(function(err){var m='Erro ao carregar o app: '+(err&&err.message||err);console.error(m);if(window.__donasShow)window.__donasShow(m);});})();</script></body></html>`;
   return { html, urls };
 }
 
