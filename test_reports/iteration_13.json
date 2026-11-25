@@ -1,0 +1,44 @@
+{
+  "summary": "Retest of the iteration_12 fixes for the full-stack preview runner. Backend: 27/27 pytest pass (11 new in test_iter13_runner_isolation.py plus the 16 from iter12). The env leak is fixed: user code sees only DB_NAME, HOME, LANG, LC_ALL, MONGO_URL, PATH, PORT, PYTHONUNBUFFERED, VIRTUAL_ENV and its own MY_APP_VAR. MONGO_URL points to a separate preview mongod, so test_database is not listed. A forced restart (?restart=1) keeps .venv, reaches running in about 2s and leaves exactly one uvicorn per project with no zombies. An edit that keeps the same length still restarts the backend and the response changes. Public run returns only {status, token}, and the 20th to 22nd calls get 429. Deleting a project stops the process, removes the work dir and drops preview_{pid}. Workspace UI: the iframe reloads by itself and shows the real /api/ping response. Reiniciar sends ?restart=1. Saving a same-length server.py edit in the editor shows the new message after about 4s. Route bar, reload, device toggle, inspect, versions, .env dialog and share popover all work. ONE FIX FAILED: the public Live Preview (/p/{id}/live) does NOT reload when the backend reaches running and stays blank until a manual reload. SECURITY GAPS REMAIN (not covered by the env fix): user backend code runs as root and can read /app/backend/.env, can connect straight to the platform mongod at mongodb://localhost:27017 (lists test_database), and can see other projects' preview_* databases.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "runner._install_and_launch (preview process sandbox)", "issue": "User code still reaches platform secrets and data outside the env: (1) it runs as root with full filesystem access, and open('/app/backend/.env') succeeded (contains MONGO_URL and likely CLERK/FORJA_ENCRYPTION_KEY/LLM keys). (2) Hardcoding MongoClient('mongodb://localhost:27017') reaches the platform mongod (/usr/bin/mongod --bind_ip_all, no auth): list_database_names() = [admin, config, local, selfhost_test, test_database]. The minimal env only hides the URL; it does not isolate anything. Verified via /api/probe in test_iter13_runner_isolation.py::test_residual_probe.", "priority": "CRITICAL"},
+      {"endpoint": "preview mongod (runner.preview_mongo_url)", "issue": "One shared preview mongod with no auth, so any project's backend can list and read other users' preview_{pid} databases (cross-tenant). Seen: project A listed preview_<B> and preview_<Isolamento>.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/public/projects/{pid}/preview/run", "issue": "The rate limit key comes from the first X-Forwarded-For value, which a client can spoof to get around the 20/min limit. LivePreview polls every 3s (20/min) plus a duplicate initial POST (StrictMode). If an install takes longer than about 55s the poll gets 429, so r.ok is false, d is {} and polling stops for good."},
+      {"endpoint": "PUT /api/projects/{pid}/env", "issue": "Env vars are not part of the backend signature, so saving new env vars does not restart a running backend. The user must click Reiniciar. Consider forcing a restart after an env save."},
+      {"endpoint": "DELETE /api/projects/{pid} and /preview/stop", "issue": "runner.stop() blocks: killpg wait up to 5s plus a sync pymongo drop_database, called directly inside an async handler. This blocks the event loop. Wrap it in run_in_threadpool."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "LivePreview.jsx (/p/{id}/live)", "issue": "The iframe does not reload when the backend changes from installing to running. Reproduced twice: after /preview/stop, open /p/{id}/live; the iframe fetches proxy/api/ping once, gets 503 and shows an empty msg. The poll then sees running and bumps tick, but nothing else happens, and the msg stays '' after 40-90s. A manual page reload shows 'pong do backend XY'. RCA: the 'installing' response already includes the token, so the first build has the proxy. When running arrives, stamp is reset and buildPreview runs again, but it produces an IDENTICAL html string. srcDoc does not change, so React never reloads the iframe. Fix: add key={reloadKey} to live-preview-iframe and bump it on the running transition, like PreviewPanel does, or add a nonce to the html.", "selector": "[data-testid='live-preview-iframe']", "priority": "HIGH"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter13_runner_isolation.py", "/app/backend/tests/runner_check.py", "/app/backend/tests/iter13_proc_check.py", "/app/backend/tests/iter13_ui_setup.py", "/app/backend/tests/test_iter12_preview_runner.py", "/app/test_reports/pytest/iter13.xml"],
+  "action_items": [
+    "LivePreview.jsx: force an iframe remount (key bump) when the backend status changes to running. A rebuild that produces identical html does not reload srcDoc.",
+    "Sandbox preview processes. Run them as an unprivileged user (Popen user=/preexec setuid to a 'preview' uid) with no read access to /app (chmod 600 /app/backend/.env owned by root), or use bubblewrap/nsjail/a container. Also block access to the platform mongod at 127.0.0.1:27017: enable auth on it or add a network namespace.",
+    "Isolate the preview mongod per project. Either create one Mongo user per preview_{pid} DB with --auth and pass credentials in MONGO_URL, or run one mongod per project.",
+    "LivePreview polling: handle 429 by backing off instead of stopping, and drop the duplicate initial POST. Optionally use request.client.host or the trusted last proxy hop for the rate limit key.",
+    "Restart the backend (force) after PUT /env when one is running, or include an env hash in the signature.",
+    "Run runner.stop in a threadpool in delete_project and preview_stop."
+  ],
+  "critical_code_review_comments": [
+    "runner.py: hiding the env is not isolation. The child runs as root on the same host and network namespace as the platform (see the critical issue).",
+    "runner.ensure: lock.acquire(blocking=False) returns the current status when the lock is taken. A forced restart that arrives during another ensure is silently ignored (no 409 or retry).",
+    "runner.shutdown_all kills the preview mongod on every platform hot-reload. The preview mongod port changed during testing (33413 to 33235), and all running previews die on a server.py edit. This is acceptable in dev but worth knowing.",
+    "runner.sync_files reads binary files sequentially through run_in_threadpool. This is fine but slow for large projects.",
+    "server.py is 906 lines (>700). Consider splitting the preview and env routes into a router module."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter13_runner_isolation.py", "/app/backend/tests/runner_check.py", "/app/backend/tests/iter13_proc_check.py", "/app/backend/tests/iter13_ui_setup.py"],
+  "success_rate": {"backend": "100% (27/27 functional tests). Critical sandbox gaps remain: filesystem read of /app/backend/.env, direct access to the platform mongod, cross-project preview DB access", "frontend": "~92% (12/13 checks; Live Preview auto-reload failed)"},
+  "seed_data_creation": "No seed data. Created TEST_iter13_* projects (isolation, delete, crud, proc, ui_fullstack), all deleted by id. Deleted the leftover 'Isolamento' project 8c7774b6 as permitted. Final state: /tmp/donas_previews has only _mongo; preview mongod DBs = [admin, config, local]; no TEST_ projects remain.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend/tests && python -m pytest test_iter13_runner_isolation.py test_iter12_preview_runner.py -q. test_residual_probe only prints (dotenv_readable, platform_dbs); turn it into hard asserts once the sandbox is fixed (expect dotenv_readable False and platform_dbs None). For Live Preview: POST /api/projects/{pid}/preview/stop, then open /p/{pid}/live and check that #msg in live-preview-iframe shows the ping message without a reload. For UI, use iter13_ui_setup.py create/delete <pid>. Use `ps -eo pid,stat,args --width 1000`; without --width the long uvicorn command lines are truncated.",
+  "rca of the issue": "Live Preview: LivePreview.jsx polls preview/run. The token arrives with the 'installing' status, so the first build already includes the proxy and the app's mount fetch gets 503. On running, tick is bumped and stamp reset, so load() rebuilds, but buildPreview returns the same html string. setHtml(sameString) does not change the iframe srcDoc, so it never reloads. The Workspace avoids this by bumping the iframe key in PreviewPanel."
+}

@@ -26,22 +26,31 @@ export default function LivePreview() {
   const ptokRef = useRef(null);
   const lastStatus = useRef(null);
   const [tick, setTick] = useState(0);
+  const [frameKey, setFrameKey] = useState(0);
 
   useEffect(() => {
-    let alive = true; let tries = 0;
+    let alive = true; let tries = 0; let timer = null;
+    const handle = (d) => {
+      if (d.token && d.token !== ptokRef.current) { ptokRef.current = d.token; stamp.current = null; setTick((x) => x + 1); }
+      if (d.status === "running" && lastStatus.current && lastStatus.current !== "running") setFrameKey((k) => k + 1);
+      lastStatus.current = d.status;
+    };
     const poll = async () => {
       if (!alive) return;
       try {
-        const r = await fetch(`${API}/${id}/preview/run`, { method: "POST" });
-        const d = r.ok ? await r.json() : {};
-        if (d.token && d.token !== ptokRef.current) { ptokRef.current = d.token; stamp.current = null; setTick((x) => x + 1); }
-        if (d.status === "running" && lastStatus.current && lastStatus.current !== "running") { stamp.current = null; setTick((x) => x + 1); }
-        lastStatus.current = d.status;
-        if (["starting", "installing"].includes(d.status) && tries++ < 80) setTimeout(poll, 3000);
-      } catch { if (tries++ < 10) setTimeout(poll, 3000); }
+        const r = await fetch(`${API}/${id}/preview/status`);
+        if (r.ok) handle(await r.json());
+      } catch {}
+      if (alive && ["starting", "installing"].includes(lastStatus.current) && tries++ < 120) timer = setTimeout(poll, 3000);
     };
-    poll();
-    return () => { alive = false; };
+    (async () => {
+      try {
+        const r = await fetch(`${API}/${id}/preview/run`, { method: "POST" });
+        if (r.ok) handle(await r.json());
+      } catch {}
+      if (alive && ["starting", "installing"].includes(lastStatus.current)) timer = setTimeout(poll, 3000);
+    })();
+    return () => { alive = false; clearTimeout(timer); };
   }, [id]);
 
   useEffect(() => {
@@ -93,7 +102,7 @@ export default function LivePreview() {
     </div>
   );
   return (
-    <iframe ref={frameRef} title="Prévia pública" data-testid="live-preview-iframe" srcDoc={html || emptyHtml("Carregando…")}
+    <iframe key={frameKey} ref={frameRef} title="Prévia pública" data-testid="live-preview-iframe" srcDoc={html || emptyHtml("Carregando…")}
       sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox" referrerPolicy="no-referrer"
       className="fixed inset-0 h-full w-full border-0 bg-white" />
   );

@@ -41,29 +41,129 @@ _locks: dict = {}
 # database or the encrypted secrets stored there.
 _MONGO: dict = {}
 _mongo_lock = threading.Lock()
+MONGO_ADMIN = "donas_admin"
+BASE_PY = os.path.realpath(sys.executable)
+GUARD_DIR = os.path.join(WORK_ROOT, "_guard")
+
+# Soft network guard loaded into every preview backend (via a root-owned PYTHONPATH dir):
+# blocks connections to loopback/private/link-local addresses except the preview Mongo port.
+GUARD_CODE = '''import socket, ipaddress, os
+_ALLOW = {int(p) for p in os.environ.get("DONAS_ALLOW_PORTS", "").split(",") if p}
+_oc, _oce = socket.socket.connect, socket.socket.connect_ex
+def _blocked(addr):
+    try:
+        host, port = addr[0], int(addr[1])
+        ips = {i[4][0] for i in socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)}
+    except Exception:
+        return False
+    for ip in ips:
+        a = ipaddress.ip_address(ip.split("%")[0])
+        if a.is_loopback and port in _ALLOW:
+            continue
+        if a.is_loopback or a.is_private or a.is_link_local or a.is_unspecified or a.is_reserved:
+            return True
+    return False
+def connect(self, addr):
+    if self.family in (socket.AF_INET, socket.AF_INET6) and _blocked(addr):
+        raise ConnectionRefusedError("Donas: acesso à rede interna bloqueado na prévia")
+    return _oc(self, addr)
+def connect_ex(self, addr):
+    if self.family in (socket.AF_INET, socket.AF_INET6) and _blocked(addr):
+        return 111
+    return _oce(self, addr)
+socket.socket.connect = connect
+socket.socket.connect_ex = connect_ex
+'''
 
 
-def preview_mongo_url() -> str:
+def _uid(pid: str) -> int:
+    return 20000 + int(hashlib.sha256(pid.encode()).hexdigest(), 16) % 40000
+
+
+def _as_uid(pid: str, cmd: list) -> list:
+    u = str(_uid(pid))
+    return ["setpriv", f"--reuid={u}", f"--regid={u}", "--clear-groups", "--"] + cmd
+
+
+def harden_platform():
+    """Make platform secrets unreadable to the unprivileged preview uids."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for f in (os.path.join(here, ".env"),):
+        if os.path.exists(f):
+            os.chmod(f, 0o600)
+    sd = os.environ.get("STORAGE_DIR")
+    if sd and os.path.isdir(sd):
+        os.chmod(sd, 0o700)
+    os.makedirs(WORK_ROOT, exist_ok=True)
+    os.chmod(WORK_ROOT, 0o711)
+    os.makedirs(GUARD_DIR, exist_ok=True)
+    with open(os.path.join(GUARD_DIR, "sitecustomize.py"), "w") as fh:
+        fh.write(GUARD_CODE)
+    os.chmod(GUARD_DIR, 0o755)
+    os.chmod(os.path.join(GUARD_DIR, "sitecustomize.py"), 0o644)
+    # orphans from a previous platform process
+    subprocess.run(["pkill", "-f", f"{WORK_ROOT}/.+/uvicorn"], capture_output=True)
+    subprocess.run(["pkill", "-f", f"--dbpath {WORK_ROOT}/_mongo"], capture_output=True)
+
+
+def _admin_pw() -> str:
+    f = os.path.join(WORK_ROOT, ".mongo_admin")
+    if os.path.exists(f):
+        return open(f).read().strip()
+    pw = secrets.token_urlsafe(24)
+    fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(pw)
+    return pw
+
+
+def _start_preview_mongo():
+    import time
+    import pymongo
+    from urllib.parse import quote_plus
+    dbpath = os.path.join(WORK_ROOT, "_mongo")
+    if not os.path.exists(os.path.join(WORK_ROOT, ".mongo_admin")):
+        shutil.rmtree(dbpath, ignore_errors=True)  # unknown admin creds → start fresh
+    os.makedirs(dbpath, exist_ok=True)
+    os.chmod(dbpath, 0o700)
+    pw = _admin_pw()
+    port = _free_port()
+    p = subprocess.Popen(
+        ["mongod", "--auth", "--dbpath", dbpath, "--port", str(port), "--bind_ip", "127.0.0.1",
+         "--wiredTigerCacheSizeGB", "0.25", "--quiet"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    waited = 0.0
+    while waited < 20 and not _port_open(port):
+        if p.poll() is not None:
+            raise RuntimeError("Não foi possível iniciar o MongoDB da prévia.")
+        time.sleep(0.4)
+        waited += 0.4
+    c = pymongo.MongoClient(f"mongodb://127.0.0.1:{port}", serverSelectionTimeoutMS=5000)
+    try:
+        c.admin.command("createUser", MONGO_ADMIN, pwd=pw, roles=["root"])  # localhost exception, first run only
+    except Exception:
+        pass
+    c.close()
+    admin = pymongo.MongoClient(f"mongodb://{MONGO_ADMIN}:{quote_plus(pw)}@127.0.0.1:{port}/?authSource=admin",
+                                serverSelectionTimeoutMS=5000)
+    admin.admin.command("ping")
+    _MONGO.update(proc=p, port=port, admin=admin)
+
+
+def preview_mongo_url(pid: str) -> str:
+    """Per-project credentials that can only read/write preview_{pid}."""
     with _mongo_lock:
         proc = _MONGO.get("proc")
-        if proc and proc.poll() is None:
-            return _MONGO["url"]
-        port = _free_port()
-        dbpath = os.path.join(WORK_ROOT, "_mongo")
-        os.makedirs(dbpath, exist_ok=True)
-        p = subprocess.Popen(
-            ["mongod", "--dbpath", dbpath, "--port", str(port), "--bind_ip", "127.0.0.1",
-             "--wiredTigerCacheSizeGB", "0.25", "--quiet"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        import time
-        waited = 0.0
-        while waited < 20 and not _port_open(port):
-            if p.poll() is not None:
-                raise RuntimeError("Não foi possível iniciar o MongoDB da prévia.")
-            time.sleep(0.4)
-            waited += 0.4
-        _MONGO.update(proc=p, url=f"mongodb://127.0.0.1:{port}", port=port)
-        return _MONGO["url"]
+        if not proc or proc.poll() is not None:
+            _start_preview_mongo()
+        db = f"preview_{pid}"
+        user = f"p_{pid}"
+        pw = hashlib.sha256((_admin_pw() + pid).encode()).hexdigest()[:32]
+        try:
+            _MONGO["admin"][db].command("createUser", user, pwd=pw, roles=[{"role": "readWrite", "db": db}])
+        except Exception:
+            pass
+        return f"mongodb://{user}:{pw}@127.0.0.1:{_MONGO['port']}/{db}?authSource={db}"
 
 
 def _now() -> float:
@@ -143,48 +243,49 @@ def _install_and_launch(pid: str, env_vars: dict):
     pybin = os.path.join(venv, "bin", "python")
     pipbin = os.path.join(venv, "bin", "pip")
     log: list[str] = []
+    uid = _uid(pid)
     try:
         st["status"] = "installing"
+        # Private work dir owned by this project's unprivileged uid (others can't read it).
+        subprocess.run(["chown", "-R", f"{uid}:{uid}", root], check=True, capture_output=True)
+        os.chmod(root, 0o700)
+        base_env = {"PATH": f"{venv}/bin:/usr/local/bin:/usr/bin:/bin", "HOME": root,
+                    "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "PIP_NO_CACHE_DIR": "1",
+                    "PIP_DISABLE_PIP_VERSION_CHECK": "1"}
         if not os.path.exists(pybin):
             log.append("$ criando ambiente virtual…")
-            subprocess.run([sys.executable, "-m", "venv", venv], check=True, capture_output=True, text=True, timeout=120)
+            subprocess.run(_as_uid(pid, [BASE_PY, "-m", "venv", venv]), env=base_env,
+                           check=True, capture_output=True, text=True, timeout=120)
         req = os.path.join(backend_dir, "requirements.txt")
         cmd = [pipbin, "install", "-q"]
         cmd += ["-r", req] if os.path.exists(req) else BASE_DEPS
         log.append("$ pip install " + ("-r requirements.txt" if os.path.exists(req) else " ".join(BASE_DEPS)))
-        r = subprocess.run(cmd, cwd=backend_dir, capture_output=True, text=True, timeout=600)
+        r = subprocess.run(_as_uid(pid, cmd), cwd=backend_dir, env=base_env, capture_output=True, text=True, timeout=600)
         log.append((r.stdout or "")[-1500:])
         if r.returncode != 0:
             log.append("ERRO pip:\n" + (r.stderr or "")[-2000:])
             st.update(status="error", log="\n".join(log))
             return
         # ensure uvicorn is present even if requirements.txt forgot it
-        subprocess.run([pipbin, "install", "-q", "uvicorn[standard]", "motor"], cwd=backend_dir,
-                       capture_output=True, text=True, timeout=300)
+        subprocess.run(_as_uid(pid, [pipbin, "install", "-q", "uvicorn[standard]", "motor"]), cwd=backend_dir,
+                       env=base_env, capture_output=True, text=True, timeout=300)
 
         port = _free_port()
         # Minimal, isolated environment: NO platform secrets, NO platform MONGO_URL.
-        # Only the project's own env vars plus a dedicated preview Mongo instance.
-        proc_env = {
-            "PATH": f"{venv}/bin:" + os.environ.get("PATH", "/usr/bin:/bin"),
-            "HOME": os.environ.get("HOME", "/tmp"),
-            "LANG": os.environ.get("LANG", "C.UTF-8"),
-            "LC_ALL": os.environ.get("LC_ALL", "C.UTF-8"),
-            "VIRTUAL_ENV": venv,
-            "PYTHONUNBUFFERED": "1",
-        }
+        proc_env = dict(base_env, VIRTUAL_ENV=venv, PYTHONUNBUFFERED="1", PYTHONPATH=GUARD_DIR)
         for k, v in (env_vars or {}).items():
-            if k not in ("MONGO_URL", "DB_NAME", "PORT") and isinstance(v, str):
+            if k not in ("MONGO_URL", "DB_NAME", "PORT", "PYTHONPATH", "DONAS_ALLOW_PORTS") and isinstance(v, str):
                 proc_env[k] = v
         try:
-            proc_env["MONGO_URL"] = preview_mongo_url()
+            proc_env["MONGO_URL"] = preview_mongo_url(pid)
+            proc_env["DONAS_ALLOW_PORTS"] = str(_MONGO["port"])
         except Exception as e:
             log.append(f"Aviso: Mongo da prévia indisponível ({e}).")
         proc_env["DB_NAME"] = f"preview_{pid}"
         proc_env["PORT"] = str(port)
         log.append(f"$ uvicorn server:app --port {port}  (DB_NAME=preview_{pid})")
         proc = subprocess.Popen(
-            [os.path.join(venv, "bin", "uvicorn"), "server:app", "--host", "127.0.0.1", "--port", str(port)],
+            _as_uid(pid, [os.path.join(venv, "bin", "uvicorn"), "server:app", "--host", "127.0.0.1", "--port", str(port)]),
             cwd=backend_dir, env=proc_env, start_new_session=True,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         st.update(proc=proc, port=port)
@@ -253,13 +354,15 @@ def _kill_proc(proc):
 
 
 def _drop_preview_db(pid: str):
-    if not _MONGO.get("url"):
+    admin = _MONGO.get("admin")
+    if not admin:
         return
     try:
-        import pymongo
-        c = pymongo.MongoClient(_MONGO["url"], serverSelectionTimeoutMS=2000)
-        c.drop_database(f"preview_{pid}")
-        c.close()
+        admin[f"preview_{pid}"].command("dropUser", f"p_{pid}")
+    except Exception:
+        pass
+    try:
+        admin.drop_database(f"preview_{pid}")
     except Exception:
         pass
 
@@ -303,8 +406,10 @@ async def ensure(pid: str, env_vars: dict, force: bool = False) -> dict:
         return status(pid)
     try:
         has_backend, sig = await _scan(pid)
+        import json as _json
+        sig = hashlib.sha256((sig + _json.dumps(env_vars or {}, sort_keys=True)).encode()).hexdigest()
         if not has_backend:
-            stop(pid)
+            await run_in_threadpool(stop, pid)
             RUNNERS[pid] = {"status": "no_backend", "sig": sig, "last_active": _now()}
             return status(pid)
         st = RUNNERS.get(pid)
@@ -314,7 +419,7 @@ async def ensure(pid: str, env_vars: dict, force: bool = False) -> dict:
             return status(pid)
         old = RUNNERS.get(pid)
         if old and old.get("proc"):
-            _kill_proc(old["proc"])
+            await run_in_threadpool(_kill_proc, old["proc"])
         await sync_files(pid)
         RUNNERS[pid] = {"status": "starting", "sig": sig,
                         "token": (old or {}).get("token") or secrets.token_urlsafe(24),

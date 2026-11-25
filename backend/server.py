@@ -205,7 +205,7 @@ async def delete_project(pid: str, member: dict = Depends(current_member)):
     for col in ("files", "messages", "versions"):
         await db[col].delete_many({"project_id": pid})
     await db.projects.delete_one({"id": pid, "user_id": member["user_id"]})
-    runner.stop(pid)
+    await run_in_threadpool(runner.stop, pid)
     return {"ok": True}
 
 
@@ -277,7 +277,7 @@ async def preview_status(pid: str, member: dict = Depends(current_member)):
 @api.post("/projects/{pid}/preview/stop")
 async def preview_stop(pid: str, member: dict = Depends(current_member)):
     await get_project(pid, member)
-    runner.stop(pid)
+    await run_in_threadpool(runner.stop, pid)
     return {"ok": True}
 
 
@@ -290,12 +290,25 @@ async def preview_proxy(pid: str, path: str, request: Request):
     return await runner.proxy(pid, request.method, path, request)
 
 
+def _client_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[-1].strip()  # rightmost = appended by our trusted proxy
+    return request.client.host if request.client else ""
+
+
 @api.post("/public/projects/{pid}/preview/run")
 async def public_preview_run(pid: str, request: Request):
-    ip = (request.headers.get("x-forwarded-for") or (request.client.host if request.client else "")).split(",")[0].strip()
-    rate_limit(f"pubrun:{ip}", 20, 60)
+    rate_limit(f"pubrun:{_client_ip(request)}", 20, 60)
     p = await public_project(pid)
     await runner.ensure(pid, load_env(p))
+    return runner.public_status(pid)
+
+
+@api.get("/public/projects/{pid}/preview/status")
+async def public_preview_status(pid: str, request: Request):
+    rate_limit(f"pubstatus:{_client_ip(request)}", 120, 60)
+    await public_project(pid)
     return runner.public_status(pid)
 
 
@@ -896,6 +909,10 @@ async def startup():
     except Exception as e:
         logger.error("Storage init failed: %s", e)
     import threading
+    try:
+        await run_in_threadpool(runner.harden_platform)
+    except Exception as e:
+        logger.error("Preview hardening failed: %s", e)
     threading.Thread(target=runner.reaper_loop, daemon=True).start()
 
 
