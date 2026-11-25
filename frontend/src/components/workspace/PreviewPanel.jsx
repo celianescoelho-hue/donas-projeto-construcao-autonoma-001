@@ -92,14 +92,15 @@ export default function PreviewPanel({ html, building, busy, onFixErrors, onPick
   const [dismissed, setDismissed] = useState(false);
   const [inspect, setInspect] = useState(false);
   const [route, setRoute] = useState("/");
-  const routeRef = useRef("/");
+  const wantRef = useRef("/");
+  const pendingRestore = useRef(null);
   const stage = useRef(null);
   const frameRef = useRef(null);
   const scale = useFitScale(stage, mode === "mobile");
 
   const go = (p) => {
     const path = p && p.startsWith("/") ? p : "/" + (p || "");
-    routeRef.current = path;
+    wantRef.current = path;
     setRoute(path);
     frameRef.current?.contentWindow?.postMessage({ donasNavigate: path }, "*");
   };
@@ -111,17 +112,24 @@ export default function PreviewPanel({ html, building, busy, onFixErrors, onPick
       if (d.donasLog?.level === "error") setErrors((l) => (l.includes(d.donasLog.msg) ? l : [...l.slice(-4), d.donasLog.msg]));
       if (d.donasPick) onPick?.(d.donasPick);
       if (d.donasInspect === false) setInspect(false);
-      if (typeof d.donasRoute === "string") { routeRef.current = d.donasRoute; setRoute(d.donasRoute); }
+      if (typeof d.donasRoute === "string") {
+        if (pendingRestore.current && pendingRestore.current !== "/" && d.donasRoute === "/") {
+          const target = pendingRestore.current;
+          pendingRestore.current = null;
+          frameRef.current?.contentWindow?.postMessage({ donasNavigate: target }, "*");
+          return;
+        }
+        pendingRestore.current = null;
+        wantRef.current = d.donasRoute;
+        setRoute(d.donasRoute);
+      }
     };
     window.addEventListener("message", h);
     return () => window.removeEventListener("message", h);
   }, [onPick]);
   useEffect(() => { setErrors([]); setDismissed(false); setInspect(false); }, [html, key]);
-  useEffect(() => {
-    if (!routeRef.current || routeRef.current === "/") return;
-    const t = setTimeout(() => frameRef.current?.contentWindow?.postMessage({ donasNavigate: routeRef.current }, "*"), 400);
-    return () => clearTimeout(t);
-  }, [html, key]);
+  // After any rebuild / reload / device remount, ask the fresh iframe to return to the route the user was on.
+  useEffect(() => { pendingRestore.current = wantRef.current; }, [html, key, mode]);
   useEffect(() => {
     frameRef.current?.contentWindow?.postMessage({ donasInspect: inspect }, "*");
     if (!inspect) return;

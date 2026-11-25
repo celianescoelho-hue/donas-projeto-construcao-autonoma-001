@@ -32,15 +32,20 @@ export default function LivePreview() {
         if (window.location.hash !== want) window.history.replaceState(null, "", want);
       }
     };
+    const onHash = () => {
+      const p = decodeURIComponent(window.location.hash.slice(1)) || "/";
+      frameRef.current?.contentWindow?.postMessage({ donasNavigate: p }, "*");
+    };
     window.addEventListener("message", onMsg);
-    return () => window.removeEventListener("message", onMsg);
+    window.addEventListener("hashchange", onHash);
+    return () => { window.removeEventListener("message", onMsg); window.removeEventListener("hashchange", onHash); };
   }, []);
 
   useEffect(() => {
     let alive = true;
-    const initialPath = decodeURIComponent(window.location.hash.slice(1)) || "/";
     const load = async () => {
       try {
+        const initialPath = decodeURIComponent(window.location.hash.slice(1)) || "/";
         const r = await fetch(`${API}/${id}/preview`);
         if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `Erro ${r.status}`);
         const d = await r.json();

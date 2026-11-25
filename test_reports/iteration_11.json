@@ -1,0 +1,31 @@
+{
+  "summary": "Tested the preview route bar on the frontend in the workspace (/p/90476221...) and in the public Live Preview (/p/<id>/live, including the #/sobre deep link). Also ran a quick backend smoke test with curl. Everything requested works. Three bugs found: in the workspace, saving a file, the reload button and the Desktop/Celular toggle all send the preview back to '/' and lose the route the user was on. Live preview has two smaller issues.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "PreviewPanel re-navigate after rebuild", "issue": "On /sobre, saving App.js rebuilds the preview but it shows Home ('Cliques') and the route input changes to '/'. Clicking the reload button does the same. Cause: the 400ms setTimeout sends {donasNavigate} before the iframe's modules (loaded from esm.sh) have finished loading, so no listener is there yet. DonasNav then mounts MemoryRouter at '/' and sends {donasRoute:'/'} back, which overwrites routeRef.", "selector": "[data-testid=preview-reload-btn], [data-testid=editor-save-btn]", "priority": "MEDIUM"},
+      {"component": "PreviewPanel Desktop/Celular toggle", "issue": "Switching device mode remounts the iframe because it moves to a different parent. The route goes back to '/' and nothing navigates again, because the re-navigate effect only depends on [html,key] and not on mode.", "selector": "[data-testid=preview-mobile-btn]", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "LivePreview polling rebuild", "issue": "initialPath is read once when the page mounts. If updated_at changes during the 10s polling, the rebuild uses that original hash instead of the current window.location.hash, so the user jumps back to the deep-link route. There is also no hashchange listener, so editing the hash by hand does nothing until reload. Code review only, not reproduced.", "affected_selectors": ["[data-testid=live-preview-iframe]"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Fix re-navigate after rebuild/reload. Recommended: pass the current route into buildPreview as initialPath (Workspace already builds the html, so keep routeRef there or lift route state into Workspace), so MemoryRouter starts on the right route. Alternative: the iframe sends {donasReady} on DonasNav mount and the parent answers with routeRef.current, instead of using a blind 400ms timeout. Also stop the first donasRoute '/' after a rebuild from overwriting the route the user wants.",
+    "Keep the route when the Desktop/Celular toggle is used: give the iframe a stable mount, or include mode in the re-navigate effect, or use the initialPath fix above.",
+    "LivePreview: on rebuild, read the hash at load time instead of the value captured at mount. Optionally add a hashchange listener that sends donasNavigate."
+  ],
+  "critical_code_review_comments": [
+    "extractRoutes flattens nested relative routes: <Route path='/app'><Route path='sobre'/></Route> gives '/sobre' instead of '/app/sobre'. Acceptable for an MVP, but the chips will be wrong for nested layouts.",
+    "The DonasNav onMsg handler in the iframe does not check e.source===parent (inspectScript does). Low risk, but inconsistent.",
+    "Unknown routes (e.g. /xyz) render only the layout with no feedback. Fine, since the user app has no 404 route."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (smoke: /api/projects 200, /api/models 200, public preview returns files+env)", "frontend": "~85% (all requested items pass; route is lost after rebuild/reload/device toggle)"},
+  "seed_data_creation": "None. Edited App.js of project 90476221 in the UI to test rebuild, route detection (added '/contato') and a broken build, then restored it. All files are byte-identical to the originals (checked via the public preview API). Side effect: 3 'Edição manual' version entries were added to the project's history.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Verified PASS: route bar with chips '/' and '/sobre'; clicking a chip goes to 'Sobre nós' with the nav kept, the input shows /sobre and the chip is active; Enter and the go button both navigate ('sobre' without a slash is normalised); Link clicks inside the iframe update the input; no 'Failed to construct URL' anywhere; adding a Route in App.js plus Salvar adds a chip that works; a broken build shows preview-error-banner with 'Corrigir com IA'; inspect picks h1 and fills the chat with file/line; phone frame toggle works. Live: /live renders Home with hash #/; Link clicks update the hash; #/sobre deep link renders Sobre with no login. FAIL: route is lost after save rebuild, reload button and device toggle. To check a fix: go to /sobre, click preview-reload-btn, wait 5s, and expect 'Sobre nós'."
+}
