@@ -1,0 +1,26 @@
+{
+  "summary": "Backend unit/integration test of the new html_to_js_module agent tool via Agent.run_tool on a scratch project (TEST_iter8_html2js, created/deleted via API). 16/17 pass. Registration, dispatch, export-default module generation, JSON-valid string (also verified by importing the module in Node), external script/URL removal, external <a> -> '#', change card emission, create vs edit op, keep_stylesheets true/false, keep_domains, source untouched, all validation errors (js_path outside frontend/src incl. '..', non-.js, missing html, binary html, missing args) and no file written on error all work. One spec gap: only EXTERNAL <script src=http...> tags are removed; local <script src='js/x.js'> and inline <script>...</script> remain in the embedded HTML, whereas the request says to clean 'old <script> tags' and expects 'no <script> tags'. Regression: test_unknown_tool.py prints 'model calls: 2'; move_or_copy_file, clean_external_links, search_in_files OK; test_iter4_attach_tools.py 14/14 when run alone (extract_zip included). Preview builder escapes '<' in the modules JSON (\\u003c), so a '</script>' inside the string will not break the preview. The live preview render was not checked (optional).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "agent tool html_to_js_module (agent.py Agent._html_to_js_module)", "issue": "It reuses strip_external, which drops only external scripts (EXT_SCRIPT regex needs src=http(s)/\\/\\/). Inline <script>...</script> and local <script src='js/local-old.js'></script> stay in the exported HTML. This breaks the requirement to remove old <script> tags. They won't run under dangerouslySetInnerHTML, but they are dead weight and do not match the tool description. Fix: in _html_to_js_module, after strip_external, run re.sub(r'<script\\b[^>]*>.*?</script\\s*>', '', cleaned, flags=re.I|re.S) plus self-closing/orphan <script ...> tags, and add the count to stats/the message (optionally behind a keep_inline_scripts flag)."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/backend/tests/test_iter8_html_to_js_module.py", "/app/test_reports/pytest/iter8_results.xml"],
+  "action_items": [
+    "Strip ALL <script> tags (inline and local, not just external) in Agent._html_to_js_module, and report the count in the OK message and the change card. Then re-run tests/test_iter8_html_to_js_module.py::TestConvert::test_no_script_tags."
+  ],
+  "critical_code_review_comments": [
+    "_html_to_js_module message says '{stats['scripts']} scripts externos removidos' — accurate today, but once all scripts are stripped update the wording.",
+    "The tool also passes <base>, <meta http-equiv=refresh>, and inline on* handlers (onclick=...) through. Not a blocker; consider stripping on* attributes too, since React will inject them raw.",
+    "agent.py is 729 lines (>700). Consider moving the HTML/file server tools (strip_external, _move_copy, _clean_links, _extract_zip, _html_to_js_module) into a separate module.",
+    "Test infra: running several test modules in one pytest process fails because each module creates its own asyncio loop while Motor's db client binds to the first. pytest.ini also uses xdist --dist loadscope, which splits classes of one module across workers (module fixtures are then duplicated per worker). Run these unit files with -o addopts='' one file at a time."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter8_html_to_js_module.py"],
+  "success_rate": {"backend": "94% (16/17)", "frontend": "not tested (backend only)"},
+  "seed_data_creation": "None persisted. Scratch project TEST_iter8_html2js created via API and deleted in the fixture teardown (verified no record remains). No OpenRouter calls except the existing test_unknown_tool.py regression (stubbed model).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend && python -m pytest tests/test_iter8_html_to_js_module.py -o addopts='' -q. The only failing test is test_no_script_tags (inline/local scripts kept). The HTML fixture includes an external script, a local script, an inline script, external stylesheets, an external <a>, backticks/${}/backslashes, and ~3000 lines. Live preview render with dangerouslySetInnerHTML was not checked."
+}

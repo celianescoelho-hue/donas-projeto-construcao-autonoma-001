@@ -85,6 +85,7 @@ TOOLS = [
 LINK_ATTR = re.compile(r'(\s(?:href|src|action|poster|data-src|srcset)\s*=\s*)(["\'])(.*?)\2', re.I | re.S)
 TAG_RE = re.compile(r'<([a-zA-Z][\w-]*)(\s(?:[^<>"\']|"[^"]*"|\'[^\']*\')*)?/?>', re.S)
 EXT_SCRIPT = re.compile(r'<script\b[^>]*?\ssrc\s*=\s*(["\'])((?:https?:)?//[^"\']+)\1[^>]*>\s*</script\s*>', re.I | re.S)
+ALL_SCRIPT = re.compile(r'<script\b[^<]*(?:(?!</script>)<[^<]*)*</script>', re.I)
 
 
 def _host(url: str):
@@ -406,15 +407,17 @@ class Agent:
             return f"ERRO: '{src}' não existe ou não é um arquivo de texto (.html)."
         keep = [k.strip().lower().lstrip(".") for k in (args.get("keep_domains") or []) if k and k.strip()]
         cleaned, stats, domains = await run_in_threadpool(strip_external, f["content"], keep, args.get("keep_stylesheets", True) is not False)
+        scripts_removed = len(ALL_SCRIPT.findall(cleaned))
+        cleaned = ALL_SCRIPT.sub("", cleaned)
         module = "// Gerado por html_to_js_module a partir de " + src + " — não edite à mão.\nexport default " + json.dumps(cleaned) + ";\n"
         before = await self._get(dest)
         await self._write(dest, before, module)
         n = module.count("\n") + 1
         top = ", ".join(sorted(domains)[:20]) or "nenhum"
         await self._light_card(dest, "edit" if before else "create", n, before.get("content", "").count("\n") + 1 if before else 0,
-                               f"(módulo JS gerado de {src}: {len(f['content'])//1024} KB de HTML embutido; {stats['scripts']} scripts e {stats['link_tags']} <link> externos removidos. Importe com: import html from './{dest.split('/')[-1]}')")
+                               f"(módulo JS gerado de {src}: {len(f['content'])//1024} KB de HTML embutido; {scripts_removed} <script> (externos e inline) e {stats['link_tags']} <link> externos removidos. Importe com: import html from './{dest.split('/')[-1]}')")
         return (f"OK: {dest} criado como módulo JS (export default). HTML de {len(f['content'])} bytes embutido; "
-                f"{stats['scripts']} scripts externos e {stats['link_tags']} <link> removidos, {stats['links']} links → '#'. Domínios: {top}. "
+                f"{scripts_removed} <script> removidos, {stats['link_tags']} <link> externos removidos, {stats['links']} links → '#'. Domínios: {top}. "
                 f"No React: import html from './{dest.split('/')[-1]}'; e use <div dangerouslySetInnerHTML={{{{ __html: html }}}} />.")
 
     async def _get(self, path):
