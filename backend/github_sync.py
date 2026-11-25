@@ -54,33 +54,34 @@ async def list_branches(token: str, owner: str, repo: str) -> list:
     return [b["name"] for b in data]
 
 
-async def import_repo(token: str, owner: str, repo: str, branch: str, project_id: str, user_id: str) -> dict:
-    async with httpx.AsyncClient(timeout=180, follow_redirects=True) as c:
-        r = await c.get(f"{GH}/repos/{owner}/{repo}/zipball/{branch}", headers=headers(token))
-    if r.status_code >= 400:
-        raise HTTPException(status_code=400, detail=f"GitHub: não foi possível baixar o repositório ({r.status_code}).")
-    zf = zipfile.ZipFile(io.BytesIO(r.content))
-    docs, skipped, text_count, img_count = [], [], 0, 0
+MAX_ZIP = 200 * 1024 * 1024
+
+
+def _clean(path: str):
+    parts = [x for x in path.replace("\\", "/").split("/") if x not in ("", ".")]
+    return None if ".." in parts or not parts else "/".join(parts)
+
+
+def _extract(content: bytes):
+    zf = zipfile.ZipFile(io.BytesIO(content))
+    texts, images, skipped = [], [], []
     for info in zf.infolist():
         if info.is_dir():
             continue
-        path = info.filename.split("/", 1)[1] if "/" in info.filename else info.filename
+        path = _clean(info.filename.split("/", 1)[1] if "/" in info.filename else info.filename)
         if not path or excluded(path):
             continue
         if info.file_size > MAX_FILE:
             skipped.append({"path": path, "reason": "maior que 5 MB"})
             continue
-        data = zf.read(info)
         ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
         if ext in IMAGE_TYPES:
-            if img_count >= MAX_IMAGES:
+            if len(images) >= MAX_IMAGES:
                 skipped.append({"path": path, "reason": "limite de imagens"})
-                continue
-            sp = await store_binary(user_id, path, data, IMAGE_TYPES[ext])
-            docs.append({"project_id": project_id, "path": path, "kind": "binary", "storage_path": sp,
-                         "content_type": IMAGE_TYPES[ext], "size": len(data), "updated_at": now()})
-            img_count += 1
+            else:
+                images.append((path, zf.read(info), IMAGE_TYPES[ext]))
             continue
+        data = zf.read(info)
         if b"\x00" in data[:8000]:
             skipped.append({"path": path, "reason": "binário"})
             continue
@@ -89,12 +90,29 @@ async def import_repo(token: str, owner: str, repo: str, branch: str, project_id
         except UnicodeDecodeError:
             skipped.append({"path": path, "reason": "binário"})
             continue
-        if text_count >= MAX_TEXT_FILES:
+        if len(texts) >= MAX_TEXT_FILES:
             skipped.append({"path": path, "reason": "limite de 2.000 arquivos"})
             continue
-        docs.append({"project_id": project_id, "path": path, "kind": "text", "content": text,
-                     "size": len(data), "updated_at": now()})
-        text_count += 1
+        texts.append((path, text, len(data)))
+    return texts, images, skipped
+
+
+async def import_repo(token: str, owner: str, repo: str, branch: str, project_id: str, user_id: str) -> dict:
+    async with httpx.AsyncClient(timeout=180, follow_redirects=True) as c:
+        async with c.stream("GET", f"{GH}/repos/{owner}/{repo}/zipball/{branch}", headers=headers(token)) as r:
+            if r.status_code >= 400:
+                raise HTTPException(status_code=400, detail=f"GitHub: não foi possível baixar o repositório ({r.status_code}).")
+            buf = bytearray()
+            async for chunk in r.aiter_bytes():
+                buf.extend(chunk)
+                if len(buf) > MAX_ZIP:
+                    raise HTTPException(status_code=400, detail="Repositório grande demais para importar (mais de 200 MB compactado).")
+    texts, images, skipped = await run_in_threadpool(_extract, bytes(buf))
+    docs = [{"project_id": project_id, "path": p, "kind": "text", "content": t, "size": n, "updated_at": now()} for p, t, n in texts]
+    for path, data, ctype in images:
+        sp = await store_binary(user_id, path, data, ctype)
+        docs.append({"project_id": project_id, "path": path, "kind": "binary", "storage_path": sp,
+                     "content_type": ctype, "size": len(data), "updated_at": now()})
     if docs:
         await db.files.insert_many(docs)
     return {"imported": len(docs), "skipped": skipped}

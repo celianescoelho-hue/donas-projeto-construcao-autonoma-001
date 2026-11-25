@@ -337,6 +337,15 @@ async def chat(pid: str, body: ChatIn, member: dict = Depends(active_member)):
         raise HTTPException(status_code=429, detail="Você já tem 2 tarefas da IA em andamento. Aguarde uma terminar.")
     rate_limit(f"chat:{member['user_id']}", 8, 60)
     rate_limit(f"chat_h:{member['user_id']}", 80, 3600)
+    RUNNING[pid] = member["user_id"]
+    try:
+        return await _start_chat(pid, project, body, member)
+    except BaseException:
+        RUNNING.pop(pid, None)
+        raise
+
+
+async def _start_chat(pid: str, project: dict, body: ChatIn, member: dict):
     s = await get_settings()
     allowed = [m["id"] for m in s["enabled_models"]]
     model = body.model or project.get("model") or s["default_model"]
@@ -352,8 +361,6 @@ async def chat(pid: str, body: ChatIn, member: dict = Depends(active_member)):
         await db.projects.update_one({"id": pid}, {"$set": {"model": model}})
     queue: asyncio.Queue = asyncio.Queue()
     agent = Agent(project, member, queue)
-
-    RUNNING[pid] = member["user_id"]
 
     async def runner():
         try:
@@ -462,16 +469,20 @@ async def import_project(body: ImportIn, member: dict = Depends(active_member)):
 async def import_into_project(pid: str, body: ImportIn, member: dict = Depends(active_member)):
     rate_limit(f"import:{member['user_id']}", 5, 600)
     await get_project(pid, member)
-    if await db.files.count_documents({"project_id": pid}) > 0:
-        raise HTTPException(status_code=409, detail="Este projeto já tem arquivos. Crie um projeto novo para importar um repositório.")
     if RUNNING.get(pid):
-        raise HTTPException(status_code=409, detail="A IA está trabalhando neste projeto.")
-    token = await github_token(member)
+        raise HTTPException(status_code=409, detail="Este projeto está ocupado (IA ou importação em andamento).")
+    RUNNING[pid] = member["user_id"]
     try:
-        return await populate_from_github(pid, body, member, token)
-    except Exception:
-        await db.files.delete_many({"project_id": pid})
-        raise
+        if await db.files.count_documents({"project_id": pid}) > 0:
+            raise HTTPException(status_code=409, detail="Este projeto já tem arquivos. Crie um projeto novo para importar um repositório.")
+        token = await github_token(member)
+        try:
+            return await populate_from_github(pid, body, member, token)
+        except Exception:
+            await db.files.delete_many({"project_id": pid})
+            raise
+    finally:
+        RUNNING.pop(pid, None)
 
 
 @api.get("/projects/{pid}/github/suggest-message")

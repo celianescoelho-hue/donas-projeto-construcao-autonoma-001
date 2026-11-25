@@ -127,7 +127,8 @@ function LimitTab({ api }) {
   const [v, setV] = useState("");
   const [s, setS] = useState(null);
   useEffect(() => { api.get("/admin/settings").then((r) => { setS(r.data); setV(String(r.data.daily_limit_usd)); }).catch((e) => toast.error(errMsg(e))); }, [api]);
-  const save = async () => { try { const r = await api.put("/admin/settings", { daily_limit_usd: Number(v) }); setS(r.data); toast.success("Limite salvo"); } catch (e) { toast.error(errMsg(e)); } };
+  const valid = v.trim() !== "" && Number.isFinite(Number(v)) && Number(v) >= 0;
+  const save = async () => { if (!s || !valid) return toast.error("Informe um valor válido em dólares."); try { const r = await api.put("/admin/settings", { daily_limit_usd: Number(v) }); setS(r.data); toast.success("Limite salvo"); } catch (e) { toast.error(errMsg(e)); } };
   return (
     <section className="rounded-xl border bg-card p-6 max-w-lg">
       <h3 className="font-semibold">Limite diário por usuário</h3>
@@ -135,7 +136,7 @@ function LimitTab({ api }) {
       <div className="flex gap-2 items-center">
         <span className="text-sm text-muted-foreground">US$</span>
         <Input type="number" min="0" step="0.5" disabled={!s} placeholder={s ? "" : "Carregando…"} value={v} onChange={(e) => setV(e.target.value)} className="w-32 font-mono" data-testid="daily-limit-input" />
-        <Button onClick={save} data-testid="daily-limit-save">Salvar</Button>
+        <Button onClick={save} disabled={!s || !valid} data-testid="daily-limit-save">Salvar</Button>
       </div>
       {s && !s.platform_key_available && <p className="text-xs text-primary mt-4">A chave OpenRouter da plataforma ainda não foi configurada.</p>}
     </section>

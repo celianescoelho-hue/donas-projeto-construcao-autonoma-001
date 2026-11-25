@@ -66,7 +66,7 @@ function Live({ live, onOpenDiff }) {
   );
 }
 
-export default function ChatPanel({ messages, live, busy, onSend, models, model, onModel, onUploadClick, onOpenDiff, uploadDir }) {
+export default function ChatPanel({ messages, live, busy, onSend, models, model, onModel, onUploadClick, onOpenDiff, uploadDir, showImportHint, onImportGithub }) {
   const [prompt, setPrompt] = useState("");
   const endRef = useRef(null);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [messages.length, live?.text, live?.changes.length, live?.tools.length]);
@@ -79,7 +79,11 @@ export default function ChatPanel({ messages, live, busy, onSend, models, model,
           <div className="pt-10 text-center text-sm text-muted-foreground px-6" data-testid="chat-empty">
             <p className="font-display text-xl text-foreground font-bold mb-2">Descreva o que você quer criar</p>
             Ex.: “Um site para minha confeitaria com cardápio, galeria e formulário de encomenda, com API em FastAPI.”
-            <p className="mt-3 text-xs">Para continuar um projeto existente, use <span className="text-primary">Importar do GitHub</span> na árvore de arquivos — a plataforma baixa tudo antes da primeira mensagem.</p>
+            {showImportHint && (
+              <p className="mt-3 text-xs">Para continuar um projeto existente,{" "}
+                <button onClick={onImportGithub} className="text-primary underline underline-offset-2" data-testid="chat-import-github-btn">importe do GitHub</button>
+                {" "}— a plataforma baixa todos os arquivos antes da primeira mensagem.</p>
+            )}
           </div>
         )}
         {messages.map((m) => <Message key={m.id} m={m} onOpenDiff={onOpenDiff} />)}

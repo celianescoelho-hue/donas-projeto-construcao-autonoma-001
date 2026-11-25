@@ -209,7 +209,7 @@ export default function Workspace() {
       <ResizablePanelGroup direction="horizontal" className="flex-1 min-h-0">
         <ResizablePanel defaultSize={27} minSize={20}>
           <ChatPanel messages={messages} live={live} busy={!!live} onSend={send} models={models} model={model} onModel={changeModel}
-            onUploadClick={() => uploadRef.current?.click()} onOpenDiff={setDiff} uploadDir={dir} />
+            onUploadClick={() => uploadRef.current?.click()} onOpenDiff={setDiff} uploadDir={dir} showImportHint={!!project && files.length === 0} onImportGithub={() => setImportOpen(true)} />
         </ResizablePanel>
         <ResizableHandle />
         <ResizablePanel defaultSize={38} minSize={22}>

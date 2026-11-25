@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 2: retested the 2 reported bugs and the regression fixes from iteration 1. Bug 1 (unknown tool loop): the unit test gives 'model calls: 2' and the run is interrupted. One real chat ('Rode npm install e depois liste os arquivos', qwen/qwen3-coder-next) finished with a done event in 14.6s. The model said it cannot run npm/ls, used only real tools and made no unknown-tool calls. A second chat sent during that run got 409. Bug 2 (GitHub import): the validation paths work (400 'Conecte o GitHub' on both endpoints, 409 when the project has files, 404 for another user's project, 422 for a bad body, and /projects/import leaves no orphan project). Real zip import could not be tested because there is no PAT; it was code-reviewed only. Regression: '..' returns 400 on PUT, DELETE, asset and upload. 8 concurrent saves produced versions 1..8. Save, upload, restore and delete give versions 1..5 in order. Frontend: tree-empty, tree-import-github-btn, import-github-dialog, github-not-connected and the 'Ir para Configurações' link all work. chat-empty mentions Importar do GitHub. Dashboard, Settings and Admin are centered. The Admin Limite input shows 'Carregando…' and is disabled while loading. Smoke test: the project 90476221 preview renders and the Desktop/Celular toggle works.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/projects/{pid}/chat", "issue": "There is still a race between the RUNNING check and the place where it is set. The check is on line 334 and the set is on line 356, with awaits in between (get_settings, resolve_key, messages.insert_one). Two chat requests sent at the same moment can both pass the check. The step-by-step case works (409 confirmed). Fix: move RUNNING[pid] = uid to just after the check and pop it on every early exit (429/402)."},
+      {"endpoint": "POST /api/projects/{pid}/github/import", "issue": "RUNNING is not set during the import, so a chat can start while files are being inserted. Also, two imports at the same moment both pass count==0; the second insert_many then hits a duplicate key and its except block runs db.files.delete_many({project_id}), which deletes the files of the import that succeeded. Fix: mark RUNNING[pid] during the import, or use an import lock, and only delete the files this call inserted."},
+      {"endpoint": "github_sync.import_repo", "issue": "The whole zipball is loaded into memory (r.content) with no size limit, and zf.read runs synchronously on the event loop. A large repo can block or OOM the backend. Zip entry paths are not passed through clean_path, so names with '..' could be stored. Fix: check the content-length (for example max 100 MB), run the extraction in a threadpool, and apply clean_path."},
+      {"endpoint": "populate_from_github", "issue": "The import does not create a version (record_version), so it does not appear in Versões and cannot be used as a restore baseline. This may be intended, but note it."},
+      {"endpoint": "core.record_version", "issue": "If the project is deleted while the agent is running, find_one_and_update returns None and proj['version_seq'] raises TypeError inside Agent.run finally. Guard against proj being None."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Admin LimitTab", "issue": "The Salvar button stays enabled while the settings load, and also when the input is empty. save() sends Number('') = 0, which sets the platform daily limit to US$0 and silently blocks every user on the platform key. Disable Salvar until s is loaded and v is a valid number, and validate before the PUT. I did not click it.", "selector": "[data-testid='daily-limit-save']", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Workspace chat-empty", "issues": ["'Importar do GitHub' in the chat empty state is a purple span that looks like a link but cannot be clicked. Make it a button that opens the import dialog.", "The same hint shows on projects that already have files (for example 'Teste', with 5 files and no messages). Those projects have no import button and the backend would answer 409. Show the hint only when files.length === 0."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter2_fixes.py", "/app/backend/tests/test_iter2_shell_chat.py", "/app/backend/tests/test_unknown_tool.py", "/app/backend/tests/test_donas_api.py", "/app/test_reports/pytest/pytest_iter2.xml"],
+  "action_items": [
+    "Admin LimitTab: disable Salvar while loading or when the input is empty or invalid (it can set daily_limit_usd to 0)",
+    "chat endpoint: set RUNNING[pid] right after the check, before any await, and clear it on 402/429 exits",
+    "github import into a project: hold RUNNING or a lock during the import, and on error do not delete files inserted by another call",
+    "import_repo: limit the zip size, run zip extraction off the event loop, and clean_path the entry paths",
+    "Make the chat-empty 'Importar do GitHub' clickable and show it only for empty projects"
+  ],
+  "critical_code_review_comments": [
+    "agent.py unknown_streak: correct. It counts unknown tools, resets on a known tool call, and stops after 2 with a note and a tool_error event. Edge case: if the JSON is invalid on a known tool call, the streak is not reset, which is acceptable.",
+    "SYSTEM_PROMPT clearly states there is no terminal/shell/git and lists the 6 tools. The real model followed it.",
+    "The model over-reached on 'npm install': it also rewrote package.json and created index.js, App.js and App.css without being asked. This is model behavior, not a bug, but the prompt could say 'do not create files the user did not ask for'.",
+    "server.py is 669 lines, close to the 700-line limit. Consider splitting the GitHub and admin routes into routers."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter2_fixes.py", "/app/backend/tests/test_iter2_shell_chat.py"],
+  "success_rate": {"backend": "100% (31 passed, 1 skipped; real chat OK)", "frontend": "100% of the requested checks; 1 medium bug found outside them (Admin Salvar)"},
+  "seed_data_creation": "None. All TEST_ projects were deleted (pytest fixture cleanup, plus TEST_shell_chat and TEST_empty_ui deleted by id). The member's remaining projects are 'Agente teste' and 'Teste', both untouched. 1 real OpenRouter chat call was used.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend && pytest -n 0 tests/test_iter2_fixes.py tests/test_donas_api.py. The real chat is python tests/test_iter2_shell_chat.py and costs one call. It creates and deletes its own project and checks 409 for a concurrent chat. GitHub import with a real repo is still untested (no PAT). The Admin Limite save was deliberately not clicked."
+}
