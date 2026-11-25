@@ -85,7 +85,8 @@ TOOLS = [
 LINK_ATTR = re.compile(r'(\s(?:href|src|action|poster|data-src|srcset)\s*=\s*)(["\'])(.*?)\2', re.I | re.S)
 TAG_RE = re.compile(r'<([a-zA-Z][\w-]*)(\s(?:[^<>"\']|"[^"]*"|\'[^\']*\')*)?/?>', re.S)
 EXT_SCRIPT = re.compile(r'<script\b[^>]*?\ssrc\s*=\s*(["\'])((?:https?:)?//[^"\']+)\1[^>]*>\s*</script\s*>', re.I | re.S)
-ALL_SCRIPT = re.compile(r'<script\b[^<]*(?:(?!</script>)<[^<]*)*</script>', re.I)
+ALL_SCRIPT = re.compile(r'<script\b[^>]*>.*?</script\s*>', re.I | re.S)
+ORPHAN_SCRIPT = re.compile(r'<script\b[^>]*/?>', re.I)
 
 
 def _host(url: str):
@@ -407,8 +408,10 @@ class Agent:
             return f"ERRO: '{src}' não existe ou não é um arquivo de texto (.html)."
         keep = [k.strip().lower().lstrip(".") for k in (args.get("keep_domains") or []) if k and k.strip()]
         cleaned, stats, domains = await run_in_threadpool(strip_external, f["content"], keep, args.get("keep_stylesheets", True) is not False)
-        scripts_removed = len(ALL_SCRIPT.findall(cleaned))
+        scripts_removed = stats["scripts"] + len(ALL_SCRIPT.findall(cleaned))
         cleaned = ALL_SCRIPT.sub("", cleaned)
+        scripts_removed += len(ORPHAN_SCRIPT.findall(cleaned))
+        cleaned = ORPHAN_SCRIPT.sub("", cleaned)
         module = "// Gerado por html_to_js_module a partir de " + src + " — não edite à mão.\nexport default " + json.dumps(cleaned) + ";\n"
         before = await self._get(dest)
         await self._write(dest, before, module)

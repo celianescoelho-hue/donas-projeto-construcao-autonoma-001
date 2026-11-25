@@ -1,0 +1,31 @@
+{
+  "summary": "Backend-only re-test of Agent._html_to_js_module script stripping, run through Agent.run_tool on scratch projects (TEST_iter9_html2js and TEST_iter8_html2js, created and deleted through the API; nothing left in the db). Main fix VERIFIED: for HTML with an external <script src=https://...>, a local <script src='js/local.js'>, and an inline <script>var a=1</script>, the embedded HTML has 0 '<script' (case-insensitive). The module starts with the comment + 'export default \"...\";', json.loads decodes it, Node imports it as a string, and a change card is emitted. More edge cases also removed correctly: uppercase <SCRIPT>, <Script src=//cdn async>, type=module multiline with '<', ld+json containing '</div>'. <noscript> and body content are kept. No catastrophic backtracking on an unclosed <script> with 600KB after it. Iteration 8 suite 17/17 passes, including test_no_script_tags that failed before; js_path validation, missing/binary html ERRO with no file written, external <a> -> '#', keep_stylesheets true/false, keep_domains, source untouched. Regression: test_unknown_tool.py prints 'model calls: 2'; test_iter4_attach_tools.py 14/14 (extract_zip, move_or_copy_file, clean_external_links, search_in_files). Two minor issues found (below).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "agent tool html_to_js_module (Agent._html_to_js_module message and card)", "issue": "The '<N> <script> removidos' count leaves out external scripts. strip_external removes them first and counts them in stats['scripts'], and that number is never reported. With 3 scripts (external+local+inline) the message says '2 <script> removidos', but the card text says '(externos e inline)'. Fix: scripts_removed = stats['scripts'] + len(ALL_SCRIPT.findall(cleaned))."},
+      {"endpoint": "agent.py ALL_SCRIPT regex", "issue": "The pattern only matches an exact '</script>'. A closing tag with whitespace ('</script >', which is valid HTML) is not recognised. (a) If no later script follows, the <script> is left in the output. (b) If a later script follows, the match runs on to the next '</script>' and SILENTLY DELETES the normal HTML in between. Repro: ALL_SCRIPT.sub('', '<script>a</script ><p>LOST?</p><script>b</script><p>kept</p>') -> '<p>kept</p>'. Self-closing '<script src=x.js />' is also not removed. Fix: re.compile(r'<script\\b[^>]*>.*?</script\\s*>', re.I|re.S) plus a second pass for leftover '<script\\b[^>]*/?>' tags."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter9_html_to_js_scripts.py",
+    "/app/backend/tests/test_iter8_html_to_js_module.py",
+    "/app/test_reports/pytest/iter9_results.xml",
+    "/app/test_reports/pytest/iter9_iter8_results.xml"
+  ],
+  "action_items": [
+    "Include the external scripts (stats['scripts']) in the '<script> removidos' count in both the OK message and the change card.",
+    "Make ALL_SCRIPT accept '</script\\s*>' and use a non-greedy per-tag match (re.S), so content between scripts is never eaten. Also strip self-closing or orphan <script ...> tags."
+  ],
+  "critical_code_review_comments": [
+    "ALL_SCRIPT and EXT_SCRIPT disagree on closing-tag syntax: EXT_SCRIPT accepts '</script\\s*>' and ALL_SCRIPT does not. Unify them.",
+    "agent.py is still >700 lines; consider moving the HTML/file tools into a separate module."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter9_html_to_js_scripts.py"],
+  "success_rate": {"backend": "35/36 (97%) - the only failure is the script-count assertion", "frontend": "not tested"},
+  "seed_data_creation": "Scratch projects only (TEST_iter9_html2js, TEST_iter8_html2js), deleted by id through the fixture teardown; confirmed 0 leftover projects/files.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run each unit file separately: 'cd /app/backend && python -m pytest tests/<file> -o addopts=\"\" -q'. Motor binds to the first event loop, and xdist splits module fixtures. The member JWT comes from the conftest 'member' fixture. test_reported_count_matches_total in the iter9 file expects 3 for basic.html and fails until the count fix is in."
+}
