@@ -24,7 +24,8 @@ export default function LivePreview() {
   const cache = useRef({});
   const frameRef = useRef(null);
   const ptokRef = useRef(null);
-  const [, bump] = useState(0);
+  const lastStatus = useRef(null);
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
     let alive = true; let tries = 0;
@@ -33,7 +34,9 @@ export default function LivePreview() {
       try {
         const r = await fetch(`${API}/${id}/preview/run`, { method: "POST" });
         const d = r.ok ? await r.json() : {};
-        if (d.token && d.token !== ptokRef.current) { ptokRef.current = d.token; stamp.current = null; bump((x) => x + 1); }
+        if (d.token && d.token !== ptokRef.current) { ptokRef.current = d.token; stamp.current = null; setTick((x) => x + 1); }
+        if (d.status === "running" && lastStatus.current && lastStatus.current !== "running") { stamp.current = null; setTick((x) => x + 1); }
+        lastStatus.current = d.status;
         if (["starting", "installing"].includes(d.status) && tries++ < 80) setTimeout(poll, 3000);
       } catch { if (tries++ < 10) setTimeout(poll, 3000); }
     };
@@ -79,7 +82,7 @@ export default function LivePreview() {
     load();
     const t = setInterval(load, 10000);
     return () => { alive = false; clearInterval(t); };
-  }, [id]);
+  }, [id, tick]);
 
   if (error) return (
     <div className="h-screen grid place-items-center bg-background text-center px-6" data-testid="live-preview-error">

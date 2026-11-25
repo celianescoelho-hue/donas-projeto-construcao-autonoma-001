@@ -16,7 +16,7 @@ export function PublicToggle({ enabled, onToggle, testid = "public-preview-switc
       {enabled ? <Globe className="h-4 w-4 text-[hsl(var(--diff-add))]" /> : <Lock className="h-4 w-4 text-muted-foreground" />}
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium">Acesso público ao link</p>
-        <p className="text-xs text-muted-foreground">{enabled ? "Qualquer pessoa com o link vê o front-end (sem código do back-end)." : "Desativado: o link mostra 'prévia indisponível'."}</p>
+        <p className="text-xs text-muted-foreground">{enabled ? "Qualquer pessoa com o link usa o app (o back-end roda, mas o código dele não é exposto)." : "Desativado: o link mostra 'prévia indisponível'."}</p>
       </div>
       <Switch checked={!!enabled} disabled={busy} data-testid={testid}
         onCheckedChange={async (v) => { setBusy(true); try { await onToggle(v); } finally { setBusy(false); } }} />

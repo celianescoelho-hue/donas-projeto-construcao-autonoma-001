@@ -1,0 +1,53 @@
+{
+  "summary": "Iteration 12: tested the full-stack preview runner (backend + UI) and checked the existing preview for regressions. Backend: 15 of 16 new pytest cases pass. Run goes installing → running in about 12s. The proxy returns the real JSON with db=preview_{pid}. Requests without a token or with a wrong token get 401. The ptok query param works. POST bodies and query strings are forwarded, and X-Preview-Token is stripped before reaching the user backend. CORS preflight works. A backend edit plus re-run shows the new message. A front-end-only project returns no_backend with no token. A public project can run and be proxied (404 while not public). Deleting a project stops the process, removes the dir, makes status 404 and the proxy 401. Old regression suites (iter5 public preview, iter10 clerk) pass 23/23. The 1 failure is CRITICAL: the user's backend inherits all platform secrets. UI: the backend bar, status, Rodar/Reiniciar, logs, route bar/chips/input, reload keeping the route, Desktop/Celular, inspect→chat, Salvar rebuild, versions, env, zip and share/QR all work. 3 real integration bugs were found in the iframe/backend sync.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "runner._install_and_launch (proc_env = dict(os.environ))", "issue": "SECURITY: the user's preview backend inherits the main backend's whole environment. Confirmed through the proxy: CLERK_SECRET_KEY, OPENROUTER_API_KEY, EMERGENT_LLM_KEY, FORJA_ENCRYPTION_KEY and CLERK_PUBLISHABLE_KEY are all visible to user code (/api/envcheck in the test). It also gets the platform MONGO_URL, so it can read the main DB (users, projects.env_enc). With FORJA_ENCRYPTION_KEY it can then decrypt every user's .env and OpenRouter/GitHub keys. Any member, or the AI, can write a server.py that returns os.environ. Fix: build a minimal env (PATH, HOME, LANG, VIRTUAL_ENV + the project's own env vars + MONGO_URL/DB_NAME/PORT). Ideally use a Mongo user restricted to preview_{pid}, or a separate mongod, plus sandboxing (separate uid/container, resource limits).", "priority": "CRITICAL"}
+    ],
+    "minor": [
+      {"endpoint": "runner.sync_files", "issue": "It runs shutil.rmtree(work_dir) on every (re)start, and that deletes .venv. So the venv is NEVER reused: the log on every restart says '$ criando ambiente virtual…'. Restarts take about 12s only because of the pip cache. Fix: sync only the source files, or rmtree everything except .venv."},
+      {"endpoint": "runner.ensure / _install_and_launch", "issue": "Race: if the signature changes while the old thread is still running pip, ensure() rmtrees the dir under the running pip and starts a second thread. The old thread holds a reference to the old dict and can still Popen a uvicorn that nobody tracks (orphan process / port leak). Also proc.terminate() is never followed by wait(), so the processes are left as zombies (a defunct uvicorn was seen in ps)."},
+      {"endpoint": "POST /api/public/projects/{pid}/preview/run", "issue": "Unauthenticated, and returns the full install/runtime 'log' to anonymous visitors. Runtime logs can contain user data or secrets. There is also no rate limit, so anyone with a public link can keep a backend alive or force reinstalls. Remove 'log'/'runtime_log' from the public response."},
+      {"endpoint": "Hot reload / restart of the main backend", "issue": "RUNNERS is in memory only. When the main server restarts (deploy or reload), the child uvicorn processes are orphaned and the state is lost. Kill the process group on shutdown (start_new_session + os.killpg) or track PIDs on disk."},
+      {"endpoint": "DELETE /api/projects/{pid}", "issue": "The preview_{pid} Mongo database is not dropped when the project is deleted."},
+      {"endpoint": "runner.proxy", "issue": "The ptok query param is forwarded to the user backend in params, so the token leaks into its logs. A new httpx.AsyncClient is created per request (no connection reuse)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "BackendBar 'Reiniciar' button", "issue": "When the backend files are unchanged, Reiniciar calls /preview/run, and ensure() returns 'running' without restarting anything. The label promises a restart that never happens, so the user can't recover a hung or stateful backend. Add a force flag (e.g. POST /preview/run?restart=1), or call stop then run.", "selector": "[data-testid=preview-backend-run-btn]", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [
+      {"flow": "Workspace: first open of a project with a backend (cold start)", "issue": "The iframe is built as soon as the token arrives (status 'starting'). App fetch('/api/ping') then gets 503 while pip installs. When the status flips to 'Back-end rodando', nothing rebuilds or reloads the iframe. Observed: #msg stayed empty for the whole run and only showed 'pong' after a manual preview-reload-btn click. Fix: bump the iframe key (or rebuild) when backend.status changes to 'running'.", "affected_selectors": ["preview-iframe", "preview-backend-status"]},
+      {"flow": "Workspace: backend edit + Salvar", "issue": "The backend restarts correctly, but the iframe keeps the stale response ('pong do backend UI' instead of 'pong NOVO…') until a manual reload. backend/ files are not part of the built html, so srcDoc doesn't change. Same fix: reload the iframe when it reaches 'running' after a restart.", "affected_selectors": ["preview-iframe"]},
+      {"flow": "Workspace: same-length backend edit", "issue": "useBackendRunner's backendSig is made of path:content.length. An edit that keeps the same length ('pong do backend UI'→'pong do backend XY') triggers no /preview/run, so the old code keeps running. Use a hash of the content, or updated_at.", "affected_selectors": ["preview-backend-status"]},
+      {"flow": "LivePreview /p/{id}/live cold start", "issue": "Same stale-iframe problem. The token arrives during 'installing', stamp is reset, and the next 10s load rebuilds the iframe while the backend is still installing (503). The poll then reaches 'running' but never rebuilds again. Observed: #msg empty for 50s+ after 'running'. Warm start works: pong shows within 2s. Also bump() is useless, because load() only runs on the interval. Rebuild when the status reaches 'running'.", "affected_selectors": ["live-preview-iframe"]}
+    ],
+    "design_issues": [
+      {"screen": "Share popover", "issues": ["Text still says 'sem código do back-end'. Now a public link also starts and exposes the project's backend through the proxy, so the wording should explain that."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter12_preview_runner.py", "/app/backend/tests/iter12_ui_setup.py", "/app/test_reports/pytest/iter12_runner.xml"],
+  "action_items": [
+    "CRITICAL: stop passing os.environ to the user backend. Give it a minimal env, and isolate Mongo access to preview_{pid} (a separate Mongo user/instance).",
+    "Reload or rebuild the preview iframe (Workspace and LivePreview) whenever the backend status becomes 'running'.",
+    "Replace the content-length backendSig in useBackendRunner with a real content hash.",
+    "Make 'Reiniciar' force a restart (stop + run, or a restart flag).",
+    "Keep .venv across syncs (don't rmtree it) so restarts really reuse the venv.",
+    "Handle the restart-during-install race and orphan processes. Call proc.wait() after terminate, and kill children on main-server shutdown.",
+    "Remove logs from the public run response, and rate-limit the public run endpoint.",
+    "Make the fetch patch add X-Preview-Token only to rewritten /api URLs. Today it sets the header on every fetch, including third-party URLs, which leaks the token and triggers CORS preflights that external APIs may reject."
+  ],
+  "critical_code_review_comments": [
+    "preview.js apiProxyScript: the fetch wrapper always sets X-Preview-Token, even for non-/api or external URLs. Only XHR checks __dp. It also rewrites any absolute URL whose path starts with /api, including third-party hosts.",
+    "runner.ensure: the non-blocking lock skips a concurrent run, but nothing re-checks the sig afterwards, so an edit that lands during an ensure() can be missed.",
+    "runner.status for an unknown pid returns 'stopped'. LivePreview treats any non-starting/installing status as final, so after a reap it never restarts unless the page is reloaded."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter12_preview_runner.py", "/app/backend/tests/iter12_ui_setup.py"],
+  "success_rate": {"backend": "94% (15/16; the failure is the critical env-leak security test) + 23/23 older regression tests", "frontend": "~80% (all regression controls pass; the iframe doesn't refresh after the backend starts or restarts, same-length edits don't restart, and Reiniciar doesn't restart)"},
+  "seed_data_creation": "Created throwaway projects TEST_runner_fullstack, TEST_runner_frontonly, TEST_runner_public and TEST_iter12_ui_fullstack for forja.member+clerk_test@example.com. All were deleted by id. I confirmed no leftover projects, no /tmp/donas_previews dirs and no runner processes.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Run: cd /app/backend && python -m pytest tests/test_iter12_preview_runner.py -n 1 -s (pytest.ini forces xdist). test_env_isolation_report must pass once the env leak is fixed. For UI: python tests/iter12_ui_setup.py create prints a pid (public project, backend /api/ping, routes / and /sobre, #msg shows the fetched msg); delete with 'delete <pid>'. Repro of the stale iframe: open /p/<pid> on a cold project and expect #msg in preview-iframe to become 'pong do backend UI' with no manual reload. Repro on live: POST /preview/stop first, then open /p/<pid>/live and wait about 40s.",
+  "rca of the issue": "Stale preview: the proxy memo in useBackendRunner, and ptokRef in LivePreview, only depend on the token. The token is issued at 'starting', so the iframe html is final before the backend accepts connections, and nothing reloads it when it reaches 'running'. backend/ files are not in the built html, so a backend edit doesn't change srcDoc either. Env leak: runner._install_and_launch copies os.environ into proc_env."
+}

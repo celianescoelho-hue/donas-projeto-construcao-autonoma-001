@@ -262,9 +262,10 @@ PROXY_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
 
 
 @api.post("/projects/{pid}/preview/run")
-async def preview_run(pid: str, member: dict = Depends(active_member)):
+async def preview_run(pid: str, request: Request, member: dict = Depends(active_member)):
     p = await get_project(pid, member)
-    return await runner.ensure(pid, load_env(p))
+    force = request.query_params.get("restart") in ("1", "true", "yes")
+    return await runner.ensure(pid, load_env(p), force=force)
 
 
 @api.get("/projects/{pid}/preview/status")
@@ -290,9 +291,12 @@ async def preview_proxy(pid: str, path: str, request: Request):
 
 
 @api.post("/public/projects/{pid}/preview/run")
-async def public_preview_run(pid: str):
+async def public_preview_run(pid: str, request: Request):
+    ip = (request.headers.get("x-forwarded-for") or (request.client.host if request.client else "")).split(",")[0].strip()
+    rate_limit(f"pubrun:{ip}", 20, 60)
     p = await public_project(pid)
-    return await runner.ensure(pid, load_env(p))
+    await runner.ensure(pid, load_env(p))
+    return runner.public_status(pid)
 
 
 @api.api_route("/public/projects/{pid}/preview/proxy/{path:path}", methods=PROXY_METHODS)
@@ -898,4 +902,5 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     app.state.index_task.cancel()
+    runner.shutdown_all()
     client.close()

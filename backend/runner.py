@@ -8,6 +8,7 @@ the files under backend/ change.
 """
 import os
 import sys
+import signal
 import socket
 import shutil
 import secrets
@@ -34,6 +35,35 @@ MAX_WAIT = 40  # seconds to wait for uvicorn to bind
 # pid -> state dict
 RUNNERS: dict = {}
 _locks: dict = {}
+
+# Dedicated, isolated MongoDB for previews. Generated backends connect ONLY to
+# this instance (never the platform DB), so user/AI code cannot read the main
+# database or the encrypted secrets stored there.
+_MONGO: dict = {}
+_mongo_lock = threading.Lock()
+
+
+def preview_mongo_url() -> str:
+    with _mongo_lock:
+        proc = _MONGO.get("proc")
+        if proc and proc.poll() is None:
+            return _MONGO["url"]
+        port = _free_port()
+        dbpath = os.path.join(WORK_ROOT, "_mongo")
+        os.makedirs(dbpath, exist_ok=True)
+        p = subprocess.Popen(
+            ["mongod", "--dbpath", dbpath, "--port", str(port), "--bind_ip", "127.0.0.1",
+             "--wiredTigerCacheSizeGB", "0.25", "--quiet"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        import time
+        waited = 0.0
+        while waited < 20 and not _port_open(port):
+            if p.poll() is not None:
+                raise RuntimeError("Não foi possível iniciar o MongoDB da prévia.")
+            time.sleep(0.4)
+            waited += 0.4
+        _MONGO.update(proc=p, url=f"mongodb://127.0.0.1:{port}", port=port)
+        return _MONGO["url"]
 
 
 def _now() -> float:
@@ -64,10 +94,16 @@ def _port_open(port: int) -> bool:
 
 
 async def sync_files(pid: str) -> tuple[bool, str]:
-    """Write the project's files to disk. Returns (has_backend, backend_signature)."""
+    """Write the project's files to disk (preserving .venv). Returns (has_backend, signature)."""
     root = work_dir(pid)
     if os.path.isdir(root):
-        shutil.rmtree(root, ignore_errors=True)
+        for name in os.listdir(root):
+            if name == ".venv":
+                continue
+            p = os.path.join(root, name)
+            shutil.rmtree(p, ignore_errors=True) if os.path.isdir(p) else os.remove(p)
+    else:
+        os.makedirs(root, exist_ok=True)
     files = await core.db.files.find({"project_id": pid}, {"_id": 0}).sort("path", 1).to_list(5000)
     has_backend = False
     sig = hashlib.sha256()
@@ -127,17 +163,29 @@ def _install_and_launch(pid: str, env_vars: dict):
                        capture_output=True, text=True, timeout=300)
 
         port = _free_port()
-        proc_env = dict(os.environ)
+        # Minimal, isolated environment: NO platform secrets, NO platform MONGO_URL.
+        # Only the project's own env vars plus a dedicated preview Mongo instance.
+        proc_env = {
+            "PATH": f"{venv}/bin:" + os.environ.get("PATH", "/usr/bin:/bin"),
+            "HOME": os.environ.get("HOME", "/tmp"),
+            "LANG": os.environ.get("LANG", "C.UTF-8"),
+            "LC_ALL": os.environ.get("LC_ALL", "C.UTF-8"),
+            "VIRTUAL_ENV": venv,
+            "PYTHONUNBUFFERED": "1",
+        }
         for k, v in (env_vars or {}).items():
-            if k not in ("MONGO_URL", "DB_NAME", "PORT"):
+            if k not in ("MONGO_URL", "DB_NAME", "PORT") and isinstance(v, str):
                 proc_env[k] = v
-        proc_env["MONGO_URL"] = os.environ["MONGO_URL"]
+        try:
+            proc_env["MONGO_URL"] = preview_mongo_url()
+        except Exception as e:
+            log.append(f"Aviso: Mongo da prévia indisponível ({e}).")
         proc_env["DB_NAME"] = f"preview_{pid}"
         proc_env["PORT"] = str(port)
         log.append(f"$ uvicorn server:app --port {port}  (DB_NAME=preview_{pid})")
         proc = subprocess.Popen(
             [os.path.join(venv, "bin", "uvicorn"), "server:app", "--host", "127.0.0.1", "--port", str(port)],
-            cwd=backend_dir, env=proc_env,
+            cwd=backend_dir, env=proc_env, start_new_session=True,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         st.update(proc=proc, port=port)
 
@@ -158,10 +206,7 @@ def _install_and_launch(pid: str, env_vars: dict):
             waited += 0.5
         log.append("Tempo esgotado esperando o backend responder.")
         st.update(status="error", log="\n".join(log))
-        try:
-            proc.terminate()
-        except Exception:
-            pass
+        _kill_proc(proc)
     except subprocess.TimeoutExpired:
         log.append("Tempo esgotado durante a instalação das dependências.")
         st.update(status="error", log="\n".join(log))
@@ -185,14 +230,55 @@ def _drain_logs(pid: str, proc):
         pass
 
 
+def _kill_proc(proc):
+    if not proc:
+        return
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except Exception:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+
+def _drop_preview_db(pid: str):
+    if not _MONGO.get("url"):
+        return
+    try:
+        import pymongo
+        c = pymongo.MongoClient(_MONGO["url"], serverSelectionTimeoutMS=2000)
+        c.drop_database(f"preview_{pid}")
+        c.close()
+    except Exception:
+        pass
+
+
 def stop(pid: str):
     st = RUNNERS.pop(pid, None)
     if st and st.get("proc"):
-        try:
-            st["proc"].terminate()
-        except Exception:
-            pass
+        _kill_proc(st["proc"])
+    _drop_preview_db(pid)
     shutil.rmtree(work_dir(pid), ignore_errors=True)
+
+
+def shutdown_all():
+    for pid in list(RUNNERS):
+        st = RUNNERS.get(pid)
+        if st and st.get("proc"):
+            _kill_proc(st["proc"])
+    if _MONGO.get("proc"):
+        _kill_proc(_MONGO["proc"])
 
 
 async def _scan(pid: str) -> tuple[bool, str]:
@@ -210,7 +296,7 @@ async def _scan(pid: str) -> tuple[bool, str]:
     return has_backend, sig.hexdigest()
 
 
-async def ensure(pid: str, env_vars: dict) -> dict:
+async def ensure(pid: str, env_vars: dict, force: bool = False) -> dict:
     """Sync files and (re)start the backend if needed. Idempotent and cheap on the hot path."""
     lock = _lock(pid)
     if not lock.acquire(blocking=False):
@@ -223,15 +309,12 @@ async def ensure(pid: str, env_vars: dict) -> dict:
             return status(pid)
         st = RUNNERS.get(pid)
         crashed = st and st.get("proc") and st["proc"].poll() is not None
-        if st and st.get("status") in ("running", "installing", "starting") and st.get("sig") == sig and not crashed:
+        if not force and st and st.get("status") in ("running", "installing", "starting") and st.get("sig") == sig and not crashed:
             st["last_active"] = _now()
             return status(pid)
         old = RUNNERS.get(pid)
         if old and old.get("proc"):
-            try:
-                old["proc"].terminate()
-            except Exception:
-                pass
+            _kill_proc(old["proc"])
         await sync_files(pid)
         RUNNERS[pid] = {"status": "starting", "sig": sig,
                         "token": (old or {}).get("token") or secrets.token_urlsafe(24),
@@ -253,9 +336,16 @@ def status(pid: str) -> dict:
     st = RUNNERS.get(pid)
     if not st:
         return {"status": "stopped"}
-    out = {"status": st["status"], "token": st.get("token"),
-           "log": st.get("log", ""), "runtime_log": st.get("runtime_log", "")}
-    return out
+    return {"status": st["status"], "token": st.get("token"),
+            "log": st.get("log", ""), "runtime_log": st.get("runtime_log", "")}
+
+
+def public_status(pid: str) -> dict:
+    """Status for anonymous Live Preview visitors: token to use the proxy, but no logs."""
+    st = RUNNERS.get(pid)
+    if not st:
+        return {"status": "stopped"}
+    return {"status": st["status"], "token": st.get("token")}
 
 
 def reaper_loop():

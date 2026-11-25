@@ -78,7 +78,7 @@ function BackendBar({ backend, onRun }) {
         </button>
         <div className="ml-auto flex items-center gap-1">
           {busy && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
-          <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={onRun} disabled={busy} data-testid="preview-backend-run-btn">
+          <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => onRun(st === "running")} disabled={busy} data-testid="preview-backend-run-btn">
             {st === "running" ? <><RotateCw className="h-3 w-3 mr-1" />Reiniciar</> : <><Play className="h-3 w-3 mr-1" />Rodar back-end</>}
           </Button>
           {log && <button onClick={() => setOpen((o) => !o)} className="text-[10px] text-muted-foreground hover:text-foreground px-1" data-testid="preview-backend-log-toggle">logs</button>}
@@ -167,6 +167,13 @@ export default function PreviewPanel({ html, building, busy, onFixErrors, onPick
     return () => window.removeEventListener("message", h);
   }, [onPick]);
   useEffect(() => { setErrors([]); setDismissed(false); setInspect(false); }, [html, key]);
+  // Reload the iframe once the real backend becomes available so pending /api calls succeed.
+  const prevBackend = useRef(null);
+  useEffect(() => {
+    const s = backend?.status;
+    if (s === "running" && prevBackend.current && prevBackend.current !== "running") setKey((k) => k + 1);
+    prevBackend.current = s;
+  }, [backend?.status]);
   // After any rebuild / reload / device remount, ask the fresh iframe to return to the route the user was on.
   useEffect(() => { pendingRestore.current = wantRef.current; }, [html, key, mode]);
   useEffect(() => {

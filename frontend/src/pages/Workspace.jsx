@@ -61,10 +61,13 @@ function useBackendRunner(api, id, files) {
   const [backend, setBackend] = useState({ status: "stopped" });
   const hasBackend = useMemo(() => files.some((f) => f.path === "backend/server.py"), [files]);
   const backendSig = useMemo(
-    () => files.filter((f) => f.path.startsWith("backend/")).map((f) => `${f.path}:${(f.content || "").length}`).join("|"),
+    () => files.filter((f) => f.path.startsWith("backend/")).map((f) => `${f.path}:${f.content || ""}`).join("\u0000"),
     [files]);
-  const run = useCallback(async () => {
-    try { const r = await api.post(`/projects/${id}/preview/run`); setBackend(r.data); } catch {}
+  const run = useCallback(async (restart = false) => {
+    try {
+      const r = await api.post(`/projects/${id}/preview/run${restart ? "?restart=1" : ""}`);
+      setBackend(r.data);
+    } catch {}
   }, [api, id]);
   useEffect(() => { if (hasBackend) run(); else setBackend({ status: "no_backend" }); }, [backendSig, hasBackend, run]);
   useEffect(() => {
