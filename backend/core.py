@@ -141,8 +141,15 @@ async def record_version(project_id: str, label: str, changes: dict, source: str
     """changes: {path: {"before": file_doc|None, "after": file_doc|None}}"""
     if not changes:
         return None
-    count = await db.versions.count_documents({"project_id": project_id})
-    doc = {"id": new_id(), "project_id": project_id, "number": count + 1, "label": label[:140], "source": source,
+    proj = await db.projects.find_one_and_update({"id": project_id}, {"$inc": {"version_seq": 1}},
+                                                 projection={"_id": 0, "version_seq": 1}, return_document=ReturnDocument.AFTER)
+    number = proj["version_seq"]
+    if number == 1:
+        last = await db.versions.find_one({"project_id": project_id}, {"_id": 0, "number": 1}, sort=[("number", -1)])
+        if last:
+            number = last["number"] + 1
+            await db.projects.update_one({"id": project_id}, {"$set": {"version_seq": number}})
+    doc = {"id": new_id(), "project_id": project_id, "number": number, "label": label[:140], "source": source,
            "changes": [{"path": p, "before": c["before"], "after": c["after"]} for p, c in changes.items()],
            "created_at": now()}
     await db.versions.insert_one(doc)

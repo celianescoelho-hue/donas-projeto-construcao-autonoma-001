@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useApi, useMe, errMsg } from "@/lib/api";
 
-export default function ImportDialog({ open, onOpenChange }) {
+export default function ImportDialog({ open, onOpenChange, projectId, onImported }) {
   const api = useApi();
   const { me } = useMe();
   const navigate = useNavigate();
@@ -33,10 +33,12 @@ export default function ImportDialog({ open, onOpenChange }) {
   const doImport = async () => {
     setBusy(true);
     try {
-      const r = await api.post("/projects/import", { owner: sel.owner, repo: sel.name, branch, name: sel.name });
+      const body = { owner: sel.owner, repo: sel.name, branch, name: sel.name };
+      const r = projectId ? await api.post(`/projects/${projectId}/github/import`, body) : await api.post("/projects/import", body);
       toast.success(`${r.data.imported} arquivos importados${r.data.skipped_count ? ` · ${r.data.skipped_count} ficaram de fora` : ""}`);
       onOpenChange(false);
-      navigate(`/p/${r.data.project_id}`);
+      if (projectId) onImported?.(r.data);
+      else navigate(`/p/${r.data.project_id}`);
     } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
   };
 

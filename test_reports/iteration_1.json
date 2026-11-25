@@ -1,0 +1,44 @@
+{
+  "summary": "First full run (backend + frontend). Backend: 23 pytest tests (22 run: 20 passed, 2 failed, 1 skipped) plus 1 real SSE chat test that passed (qwen/qwen3-coder-next, read_file then replace_in_file, a change card, version v2, cost recorded at $0.0006). Passing: /me (no key values leaked), /models, project CRUD, isolation between users, file PUT/DELETE, upload (html summary + png 1x1px summary + unsupported type error), asset, zip, versions + restore, admin endpoints (403 for member, 200 for admin), role promote/demote, block flow (403 on POST /projects and chat, then unblocked), invalid OpenRouter key gives 400 and 429 from the 6th call, invalid GitHub PAT gives 400. Frontend: landing, ticket sign-in, dashboard create/rename/delete, workspace (file tree, editor, Salvar + Ctrl+S, preview with counter and router, Desktop/Celular phone frame, terminal logs, upload via hidden input, one real UI chat with a change card, diff dialog, versions sheet restore), Settings cards, Admin tabs (overview, users role select + block switch, models, limit save, usage). All passed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT /api/projects/{id}/files, DELETE /api/projects/{id}/files, GET /api/projects/{id}/asset, POST /api/projects/{id}/upload (directory or filename containing '..')", "issue": "agent.clean_path raises ValueError('Caminho inválido'), which is not handled in server.py, so the server returns 500 instead of 400. Traversal is still blocked, but the error is unhandled. Repro: PUT /files with {path:'../etc/x.txt'} returns 500; GET /asset?path=../x.png returns 500. Traceback is in backend.err.log."},
+      {"endpoint": "POST /api/projects/{id}/chat", "issue": "RUNNING[pid] is set inside the background task, not before the 409 check. Two requests at almost the same time can both pass the 'IA já está trabalhando' check and start two agents on the same project. Set RUNNING[pid] before create_task."},
+      {"endpoint": "core.record_version", "issue": "Version number is count_documents()+1, which is not atomic. Concurrent writes (manual save during an AI run) can create duplicate version numbers. There is no unique index on (project_id, number)."},
+      {"endpoint": "PATCH /api/users/{id}/role", "issue": "Could not test the 409 'keep last admin' rule safely: 2 admins exist (donas.admin test user + celiane real admin). Code logic looks right."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Tab title / favicon", "issue": "On first load the dev server served a stale index.html (title 'Donas Build apps with ai', no favicon link) because public/index.html was edited after the frontend started. I restarted the frontend (sudo supervisorctl restart frontend). After that the title is 'Donas | Build apps with AI' and the favicon is /favicon.svg. No code change needed.", "affected_selectors": ["title", "link[rel=icon]"]}
+    ],
+    "design_issues": [
+      {"screen": "Dashboard / Settings / Admin at 1920px", "issues": ["main uses max-w-7xl without mx-auto, so the content is left-aligned and leaves a large empty area on the right on wide screens"]},
+      {"screen": "Landing hero", "issues": ["The hero image is a ninja-turtle style character (Donatello reference?). Check that it is intended and has no copyright problem.", "The 4th feature card ('Prévia desktop e celular') is very faint over the image: it is still fading in during the animation and has low contrast"]},
+      {"screen": "Admin > Limite", "issues": ["No loading state: the input is empty until GET /admin/settings resolves, and the GET has no .catch"]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_donas_api.py", "/app/backend/tests/test_donas_chat.py", "/app/backend/tests/conftest.py", "/app/backend/tests/make_copy.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "Handle ValueError from clean_path in server routes (save_file, delete_file, upload, asset), returning HTTPException 400 'Caminho inválido' instead of 500",
+    "Set RUNNING[pid] synchronously in the chat route before scheduling the agent task, to avoid a race between two runs on one project",
+    "Make version numbering atomic (counter with $inc, or a unique index plus retry)",
+    "Optional: center the main containers (mx-auto); add a loading/error state to the Admin LimitTab"
+  ],
+  "critical_code_review_comments": [
+    "server.py is 643 lines, close to the 700-line limit. Consider splitting the routers (projects, admin, github).",
+    "Blocked users can still PUT/DELETE files, restore versions and change settings. Only create project, upload, chat, import and push use active_member. Confirm this is intended.",
+    "get_object/put_object use sync requests in a threadpool (OK). delete_project does not delete the stored binaries in object storage (orphaned objects).",
+    "/admin/usage loads all users' emails each call (to_list(2000)). Fine for an MVP."
+  ],
+  "updated_files": ["/app/backend/tests/conftest.py", "/app/backend/tests/test_donas_api.py", "/app/backend/tests/test_donas_chat.py", "/app/backend/tests/make_copy.py"],
+  "success_rate": {"backend": "91% (21/23 executed incl. chat; 2 failures are the 500-on-'..' path issue; 1 skipped)", "frontend": "100% of requested flows"},
+  "test_credentials": "From /app/memory/test_credentials.md: member forja.member+clerk_test@example.com, admin donas.admin+clerk_test@example.com (tokens and tickets via tests/clerk_token.py)",
+  "seed_data_creation": "No seed. Created TEST_ projects (TEST_proj, TEST_iso, TEST_trav, TEST_trav2, TEST_chat, TEST_ui_proj, TEST_copy), all deleted by id. 2 real chat calls (~$0.0013) added usage rows. Member was blocked then unblocked (verified blocked=false). Member was promoted to admin then demoted back to member. daily_limit_usd restored to 2.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run backend with: cd /app/backend && pytest -n 0 tests/test_donas_api.py (must be serial: the block test affects the member). Chat test (real cost): pytest -n 0 tests/test_donas_chat.py -s. make_copy.py <pid> copies a project's text files into TEST_copy for UI tests that change data (binary files are not copied; upload them separately). Browser sign-in: write a ticket to a file, open /sign-in, wait for window.Clerk.loaded, signIn.create({strategy:'ticket'}) then setActive. GitHub import/push need a real PAT (not tested).",
+  "rca of the issue": "500 on '..' paths: agent.clean_path raises ValueError, but the FastAPI routes in server.py call it outside any try/except. Only Agent.run_tool catches ValueError. Fix: wrap the call or add an app-level exception handler that maps ValueError to 400."
+}

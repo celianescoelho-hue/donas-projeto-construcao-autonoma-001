@@ -126,7 +126,7 @@ function ModelsTab({ api }) {
 function LimitTab({ api }) {
   const [v, setV] = useState("");
   const [s, setS] = useState(null);
-  useEffect(() => { api.get("/admin/settings").then((r) => { setS(r.data); setV(String(r.data.daily_limit_usd)); }); }, [api]);
+  useEffect(() => { api.get("/admin/settings").then((r) => { setS(r.data); setV(String(r.data.daily_limit_usd)); }).catch((e) => toast.error(errMsg(e))); }, [api]);
   const save = async () => { try { const r = await api.put("/admin/settings", { daily_limit_usd: Number(v) }); setS(r.data); toast.success("Limite salvo"); } catch (e) { toast.error(errMsg(e)); } };
   return (
     <section className="rounded-xl border bg-card p-6 max-w-lg">
@@ -134,7 +134,7 @@ function LimitTab({ api }) {
       <p className="text-sm text-muted-foreground mt-1 mb-4">Vale só para quem usa a sua chave. Quem tem chave própria não tem limite.</p>
       <div className="flex gap-2 items-center">
         <span className="text-sm text-muted-foreground">US$</span>
-        <Input type="number" min="0" step="0.5" value={v} onChange={(e) => setV(e.target.value)} className="w-32 font-mono" data-testid="daily-limit-input" />
+        <Input type="number" min="0" step="0.5" disabled={!s} placeholder={s ? "" : "Carregando…"} value={v} onChange={(e) => setV(e.target.value)} className="w-32 font-mono" data-testid="daily-limit-input" />
         <Button onClick={save} data-testid="daily-limit-save">Salvar</Button>
       </div>
       {s && !s.platform_key_available && <p className="text-xs text-primary mt-4">A chave OpenRouter da plataforma ainda não foi configurada.</p>}
@@ -176,7 +176,7 @@ export default function Admin() {
   return (
     <div className="min-h-screen flex flex-col">
       <AppHeader />
-      <main className="px-6 lg:px-12 py-10 max-w-7xl w-full">
+      <main className="px-6 lg:px-12 py-10 max-w-7xl w-full mx-auto">
         <p className="font-mono text-xs uppercase tracking-[0.2em] text-primary mb-3">Painel admin</p>
         <h1 className="font-display text-4xl font-extrabold tracking-tight mb-8">Controle do Donas</h1>
         <Tabs defaultValue="overview">

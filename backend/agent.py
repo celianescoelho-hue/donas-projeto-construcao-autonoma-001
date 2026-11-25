@@ -26,7 +26,10 @@ SEGURANÇA OBRIGATÓRIA (sempre, em todo back-end gerado):
 - Segredos (MONGO_URL, JWT_SECRET, chaves de API) apenas em variáveis de ambiente: lidos com os.environ, listados em backend/.env.example sem valores reais; nunca colocar chaves no front-end nem no código.
 - CORS restrito por CORS_ORIGINS do .env, rate limit simples em login/cadastro, e mensagens de erro sem detalhes internos.
 
-FERRAMENTAS — trabalhe como um agente:
+FERRAMENTAS — você NÃO tem terminal, shell, git, npm, pip nem acesso à internet. Não existe run_shell_command, execute_command, bash, git clone nem nada parecido: nunca tente chamá-los. Você só pode usar estas 6 ferramentas: list_files, read_file, search_files, replace_in_file, create_file, delete_file.
+- Para instalar dependências, apenas edite frontend/package.json ou backend/requirements.txt e explique os comandos no README.
+- Se o usuário pedir para clonar/importar um repositório do GitHub, diga para ele usar o botão "Importar do GitHub" (a plataforma baixa os arquivos sozinha); não tente clonar.
+Trabalhe como um agente:
 - Use list_files / read_file / search_files para entender o projeto antes de editar arquivos existentes. Leia só os trechos necessários (start_line/end_line).
 - Para alterar um arquivo EXISTENTE use replace_in_file enviando APENAS o trecho antigo (old_text, exato, único no arquivo, com contexto suficiente) e o novo. Nunca reescreva um arquivo existente inteiro (create_file só é permitido para arquivos novos ou com até 60 linhas).
 - Se uma substituição falhar, leia o trecho atual com read_file e tente de novo.
@@ -48,6 +51,9 @@ TOOLS = [
     {"type": "function", "function": {"name": "delete_file", "description": "Apaga um arquivo do projeto.",
         "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
 ]
+
+
+TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
 
 
 def clean_path(p: str) -> str:
@@ -85,6 +91,7 @@ class Agent:
         self.text = ""
         self.cost = 0.0
         self.tokens = 0
+        self.unknown_streak = 0
 
     async def emit(self, event: dict):
         await self.q.put(event)
@@ -271,17 +278,32 @@ class Agent:
                     messages.append({"role": "assistant", "content": text or None, "tool_calls": [
                         {"id": c["id"] or f"call_{i}", "type": "function", "function": {"name": c["name"], "arguments": c["arguments"] or "{}"}}
                         for i, c in enumerate(calls)]})
+                    stop = None
                     for i, c in enumerate(calls):
                         try:
                             args = json.loads(c["arguments"] or "{}")
                         except json.JSONDecodeError:
                             args, result = None, "ERRO: argumentos JSON inválidos (talvez a resposta foi cortada). Envie arquivos menores ou edite por trechos."
                         await self.emit({"type": "tool", "name": c["name"], "path": (args or {}).get("path") or (args or {}).get("directory") or (args or {}).get("query")})
-                        if args is not None:
+                        if c["name"] not in TOOL_NAMES:
+                            self.unknown_streak += 1
+                            result = (f"ERRO: a ferramenta '{c['name']}' não existe. Você NÃO tem terminal/shell. "
+                                      f"Use somente: {', '.join(sorted(TOOL_NAMES))}.")
+                            if self.unknown_streak >= 2:
+                                stop = c["name"]
+                        elif args is not None:
+                            self.unknown_streak = 0
                             result = await self.run_tool(c["name"], args)
                         if result.startswith("ERRO"):
                             await self.emit({"type": "tool_error", "name": c["name"], "message": result[:200]})
                         messages.append({"role": "tool", "tool_call_id": c["id"] or f"call_{i}", "content": result[:20000]})
+                    if stop:
+                        note = (f"\n(Interrompido: o modelo tentou usar a ferramenta inexistente '{stop}' 2 vezes seguidas. "
+                                "Ele não tem terminal; reformule o pedido ou troque de modelo.)")
+                        self.text += note
+                        await self.emit({"type": "token", "text": note})
+                        await self.emit({"type": "tool_error", "name": stop, "message": "ferramenta inexistente 2x seguidas — execução interrompida"})
+                        break
                 else:
                     self.text += "\n(Limite de passos atingido — envie 'continue' para seguir.)"
         except Exception as e:

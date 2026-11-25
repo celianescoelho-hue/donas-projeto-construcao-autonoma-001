@@ -40,7 +40,7 @@ INDEXES = {
                  IndexModel([("user_id", ASCENDING), ("updated_at", DESCENDING)], name="user_updated")],
     "files": [IndexModel([("project_id", ASCENDING), ("path", ASCENDING)], name="project_path", unique=True)],
     "messages": [IndexModel([("project_id", ASCENDING), ("created_at", ASCENDING)], name="project_created")],
-    "versions": [IndexModel([("project_id", ASCENDING), ("number", DESCENDING)], name="project_number"),
+    "versions": [IndexModel([("project_id", ASCENDING), ("number", DESCENDING)], name="project_number_unique", unique=True),
                  IndexModel([("id", ASCENDING)], name="id", unique=True)],
     "usage": [IndexModel([("user_id", ASCENDING), ("created_at", DESCENDING)], name="user_created"),
               IndexModel([("created_at", DESCENDING)], name="created_desc")],
@@ -58,6 +58,11 @@ async def ensure_indexes():
 
 
 app = FastAPI()
+
+
+@app.exception_handler(ValueError)
+async def value_error_handler(request, exc):
+    return Response(content=json.dumps({"detail": str(exc) or "Valor inválido"}), status_code=400, media_type="application/json")
 api = APIRouter(prefix="/api")
 
 
@@ -348,8 +353,9 @@ async def chat(pid: str, body: ChatIn, member: dict = Depends(active_member)):
     queue: asyncio.Queue = asyncio.Queue()
     agent = Agent(project, member, queue)
 
+    RUNNING[pid] = member["user_id"]
+
     async def runner():
-        RUNNING[pid] = member["user_id"]
         try:
             await agent.run(body.prompt, model, api_key, source)
         finally:
@@ -427,25 +433,45 @@ class ImportIn(BaseModel):
     name: Optional[str] = None
 
 
+async def populate_from_github(pid: str, body: ImportIn, member: dict, token: str) -> dict:
+    res = await ghs.import_repo(token, body.owner, body.repo, body.branch, pid, member["user_id"])
+    await db.projects.update_one({"id": pid}, {"$set": {"github": {"owner": body.owner, "repo": body.repo, "branch": body.branch,
+                                  "imported_at": now(), "skipped_paths": [s["path"] for s in res["skipped"]]}, "updated_at": now()}})
+    await db.messages.insert_one({"id": new_id(), "project_id": pid, "role": "assistant", "created_at": now(),
+        "content": f"Repositório {body.owner}/{body.repo} ({body.branch}) importado: {res['imported']} arquivos." +
+                   (f" {len(res['skipped'])} ficaram de fora (pastas geradas, binários ou acima de 5 MB)." if res["skipped"] else "") +
+                   " Diga o que você quer continuar construindo.", "changes": []})
+    return {"project_id": pid, "imported": res["imported"], "skipped": res["skipped"][:200], "skipped_count": len(res["skipped"])}
+
+
 @api.post("/projects/import")
 async def import_project(body: ImportIn, member: dict = Depends(active_member)):
     rate_limit(f"import:{member['user_id']}", 5, 600)
     token = await github_token(member)
-    doc = project_doc(member, (body.name or body.repo).strip()[:80],
-                      {"github": {"owner": body.owner, "repo": body.repo, "branch": body.branch, "imported_at": now()}})
+    doc = project_doc(member, (body.name or body.repo).strip()[:80])
     await db.projects.insert_one(doc)
     try:
-        res = await ghs.import_repo(token, body.owner, body.repo, body.branch, doc["id"], member["user_id"])
+        return await populate_from_github(doc["id"], body, member, token)
     except Exception:
         await db.files.delete_many({"project_id": doc["id"]})
         await db.projects.delete_one({"id": doc["id"]})
         raise
-    await db.projects.update_one({"id": doc["id"]}, {"$set": {"github.skipped_paths": [s["path"] for s in res["skipped"]]}})
-    await db.messages.insert_one({"id": new_id(), "project_id": doc["id"], "role": "assistant", "created_at": now(),
-        "content": f"Repositório {body.owner}/{body.repo} ({body.branch}) importado: {res['imported']} arquivos." +
-                   (f" {len(res['skipped'])} ficaram de fora (pastas geradas, binários ou acima de 5 MB)." if res["skipped"] else "") +
-                   " Diga o que você quer continuar construindo.", "changes": []})
-    return {"project_id": doc["id"], "imported": res["imported"], "skipped": res["skipped"][:200], "skipped_count": len(res["skipped"])}
+
+
+@api.post("/projects/{pid}/github/import")
+async def import_into_project(pid: str, body: ImportIn, member: dict = Depends(active_member)):
+    rate_limit(f"import:{member['user_id']}", 5, 600)
+    await get_project(pid, member)
+    if await db.files.count_documents({"project_id": pid}) > 0:
+        raise HTTPException(status_code=409, detail="Este projeto já tem arquivos. Crie um projeto novo para importar um repositório.")
+    if RUNNING.get(pid):
+        raise HTTPException(status_code=409, detail="A IA está trabalhando neste projeto.")
+    token = await github_token(member)
+    try:
+        return await populate_from_github(pid, body, member, token)
+    except Exception:
+        await db.files.delete_many({"project_id": pid})
+        raise
 
 
 @api.get("/projects/{pid}/github/suggest-message")

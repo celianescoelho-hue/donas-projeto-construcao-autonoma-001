@@ -66,7 +66,7 @@ export default function Landing() {
       </main>
       <section className="relative z-10 px-6 lg:px-14 pb-20 grid sm:grid-cols-2 lg:grid-cols-5 gap-4">
         {features.map((f, i) => (
-          <div key={f.title} className="anim-rise rounded-xl border bg-card/80 backdrop-blur-md p-6 transition-colors duration-150 hover:border-primary/60" style={{ animationDelay: `${200 + i * 80}ms` }}>
+          <div key={f.title} className="anim-rise rounded-xl border bg-card/95 backdrop-blur-md p-6 transition-colors duration-150 hover:border-primary/60" style={{ animationDelay: `${200 + i * 80}ms` }}>
             <f.icon className="h-5 w-5 text-primary mb-5" />
             <h3 className="font-semibold mb-2">{f.title}</h3>
             <p className="text-sm text-muted-foreground leading-relaxed">{f.text}</p>

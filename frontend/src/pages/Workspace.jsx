@@ -11,6 +11,7 @@ import DiffDialog from "@/components/workspace/DiffDialog";
 import VersionsSheet from "@/components/workspace/VersionsSheet";
 import PushDialog from "@/components/workspace/PushDialog";
 import TerminalPanel from "@/components/workspace/TerminalPanel";
+import ImportDialog from "@/components/ImportDialog";
 import { Button } from "@/components/ui/button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { useApi, errMsg, streamChat } from "@/lib/api";
@@ -67,6 +68,7 @@ export default function Workspace() {
   const [diff, setDiff] = useState(null);
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [pushOpen, setPushOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [fresh, setFresh] = useState(new Set());
   const [logs, setLogs] = useState([]);
   const logSeq = useRef(0);
@@ -214,7 +216,7 @@ export default function Workspace() {
           <ResizablePanelGroup direction="horizontal">
             <ResizablePanel defaultSize={34} minSize={20}>
               <FileTree files={files} selected={selected} onSelect={setSelected} onDelete={deleteFile} onDropFiles={upload}
-                onNewFile={newFile} onUploadClick={() => uploadRef.current?.click()} dir={dir} setDir={setDir} fresh={fresh} />
+                onNewFile={newFile} onUploadClick={() => uploadRef.current?.click()} dir={dir} setDir={setDir} fresh={fresh} onImportGithub={() => setImportOpen(true)} />
             </ResizablePanel>
             <ResizableHandle />
             <ResizablePanel defaultSize={66} minSize={30}>
@@ -234,6 +236,13 @@ export default function Workspace() {
       <input ref={uploadRef} type="file" multiple hidden data-testid="upload-input"
         accept=".html,.htm,.css,.js,.jsx,.ts,.tsx,.json,.md,.txt,.py,.png,.jpg,.jpeg,.svg,.webp,.gif"
         onChange={(e) => { if (e.target.files.length) upload(e.target.files); e.target.value = ""; }} />
+      <ImportDialog open={importOpen} onOpenChange={setImportOpen} projectId={id} onImported={async (r) => {
+        log("info", `git import · ${r.imported} arquivo(s)${r.skipped_count ? ` · ${r.skipped_count} ignorados` : ""}`);
+        const [d, m] = await Promise.all([loadFiles(), api.get(`/projects/${id}/messages`)]);
+        setMessages(m.data);
+        const first = d?.files.find((f) => /App\.(jsx?|tsx)$/.test(f.path)) || d?.files[0];
+        if (first) setSelected(first.path);
+      }} />
       <DiffDialog change={diff} onClose={() => setDiff(null)} />
       <VersionsSheet open={versionsOpen} onOpenChange={setVersionsOpen} api={api} projectId={id} onRestored={loadFiles} />
       <PushDialog open={pushOpen} onOpenChange={setPushOpen} api={api} project={project} onPushed={(r) => { log("info", `git push ${r.repo}:${r.branch} · ${r.changed} arquivo(s)`); loadFiles(); }} />

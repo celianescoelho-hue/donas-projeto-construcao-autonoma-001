@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ChevronRight, Folder, FolderOpen, FileText, Image as ImageIcon, Trash2, FilePlus, Upload } from "lucide-react";
+import { ChevronRight, Folder, FolderOpen, FileText, Image as ImageIcon, Trash2, FilePlus, Upload, Github } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 function buildTree(files) {
@@ -63,7 +63,7 @@ function Children({ node, depth, ctx }) {
   );
 }
 
-export default function FileTree({ files, selected, onSelect, onDelete, onDropFiles, onNewFile, onUploadClick, dir, setDir, fresh }) {
+export default function FileTree({ files, selected, onSelect, onDelete, onDropFiles, onNewFile, onUploadClick, dir, setDir, fresh, onImportGithub }) {
   const tree = useMemo(() => buildTree(files), [files]);
   const [open, setOpen] = useState(() => new Set(["frontend", "frontend/src", "backend", "src"]));
   const toggle = (p) => setOpen((s) => { const n = new Set(s); n.has(p) ? n.delete(p) : n.add(p); return n; });
@@ -78,7 +78,12 @@ export default function FileTree({ files, selected, onSelect, onDelete, onDropFi
         <Button size="icon" variant="ghost" className="h-6 w-6" onClick={onUploadClick} title="Enviar arquivos" data-testid="tree-upload-btn"><Upload className="h-3.5 w-3.5" /></Button>
       </div>
       <div className="flex-1 overflow-auto scroll-thin p-1.5">
-        {files.length === 0 ? <p className="text-xs text-muted-foreground p-3">Vazio. Converse com a IA ou arraste arquivos aqui.</p> : <Children node={tree} depth={0} ctx={ctx} />}
+        {files.length === 0 ? (
+          <div className="p-3 space-y-3" data-testid="tree-empty">
+            <p className="text-xs text-muted-foreground">Vazio. Converse com a IA, arraste arquivos aqui ou traga um repositório.</p>
+            <Button size="sm" variant="secondary" className="w-full h-8 text-xs" onClick={onImportGithub} data-testid="tree-import-github-btn"><Github className="h-3.5 w-3.5 mr-1.5" />Importar do GitHub</Button>
+          </div>
+        ) : <Children node={tree} depth={0} ctx={ctx} />}
       </div>
       <div className="shrink-0 border-t px-2 py-1 font-mono text-[10px] text-muted-foreground truncate" data-testid="upload-dir-label">upload → /{dir}</div>
     </div>

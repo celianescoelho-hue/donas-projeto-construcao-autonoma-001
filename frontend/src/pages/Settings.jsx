@@ -40,7 +40,7 @@ export default function Settings() {
   return (
     <div className="min-h-screen flex flex-col">
       <AppHeader />
-      <main className="px-6 lg:px-12 py-10 max-w-3xl w-full space-y-6">
+      <main className="px-6 lg:px-12 py-10 max-w-3xl w-full mx-auto space-y-6">
         <div className="mb-4">
           <p className="font-mono text-xs uppercase tracking-[0.2em] text-primary mb-3">Configurações</p>
           <h1 className="font-display text-4xl font-extrabold tracking-tight">Chaves e conexões</h1>

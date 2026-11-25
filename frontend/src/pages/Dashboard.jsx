@@ -84,7 +84,7 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen flex flex-col">
       <AppHeader />
-      <main className="flex-1 px-6 lg:px-12 py-10 max-w-7xl w-full">
+      <main className="flex-1 px-6 lg:px-12 py-10 max-w-7xl w-full mx-auto">
         {me?.blocked && <div className="mb-6 rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm" data-testid="blocked-banner">Sua conta está bloqueada. Fale com o administrador.</div>}
         <div className="flex flex-wrap items-end gap-4 mb-10">
           <div>
