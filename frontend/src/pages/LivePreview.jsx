@@ -22,9 +22,23 @@ export default function LivePreview() {
   const [error, setError] = useState(null);
   const stamp = useRef(null);
   const cache = useRef({});
+  const frameRef = useRef(null);
+
+  useEffect(() => {
+    const onMsg = (e) => {
+      const d = e.data || {};
+      if (typeof d.donasRoute === "string") {
+        const want = "#" + d.donasRoute;
+        if (window.location.hash !== want) window.history.replaceState(null, "", want);
+      }
+    };
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  }, []);
 
   useEffect(() => {
     let alive = true;
+    const initialPath = decodeURIComponent(window.location.hash.slice(1)) || "/";
     const load = async () => {
       try {
         const r = await fetch(`${API}/${id}/preview`);
@@ -36,7 +50,7 @@ export default function LivePreview() {
         stamp.current = d.updated_at;
         document.title = `${d.name} · Donas`;
         const assets = await loadAssets(id, d.files, cache.current);
-        if (alive) { setHtml(buildPreview(d.files, assets, d.env).html); setError(null); }
+        if (alive) { setHtml(buildPreview(d.files, assets, d.env, initialPath).html); setError(null); }
       } catch (e) { if (alive) setError(e.message); }
     };
     load();
@@ -53,7 +67,7 @@ export default function LivePreview() {
     </div>
   );
   return (
-    <iframe title="Prévia pública" data-testid="live-preview-iframe" srcDoc={html || emptyHtml("Carregando…")}
+    <iframe ref={frameRef} title="Prévia pública" data-testid="live-preview-iframe" srcDoc={html || emptyHtml("Carregando…")}
       sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox" referrerPolicy="no-referrer"
       className="fixed inset-0 h-full w-full border-0 bg-white" />
   );

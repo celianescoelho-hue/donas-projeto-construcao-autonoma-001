@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { RotateCw, Monitor, Smartphone, AlertTriangle, MousePointerClick, Wand2, X } from "lucide-react";
+import { RotateCw, Monitor, Smartphone, AlertTriangle, MousePointerClick, Wand2, X, CornerDownLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import SharePopover from "@/components/workspace/SharePopover";
 
@@ -19,6 +19,37 @@ function useFitScale(ref, active) {
     return () => ro.disconnect();
   }, [ref, active]);
   return scale;
+}
+
+function RouteBar({ routes, route, onGo }) {
+  const [draft, setDraft] = useState(route);
+  useEffect(() => { setDraft(route); }, [route]);
+  const chips = (routes || []).filter((r) => !r.includes(":") && !r.includes("*")).slice(0, 8);
+  const submit = (e) => { e.preventDefault(); onGo(draft.trim() || "/"); };
+  return (
+    <div className="h-9 shrink-0 flex items-center gap-2 px-2 border-b bg-[#0d0d11]" data-testid="preview-route-bar">
+      <form onSubmit={submit} className="flex items-center gap-1.5 flex-1 min-w-0">
+        <span className="font-mono text-[10px] text-muted-foreground shrink-0">rota</span>
+        <div className="flex items-center flex-1 min-w-0 rounded-md bg-secondary border border-border/60 focus-within:border-primary/60 h-6">
+          <input value={draft} onChange={(e) => setDraft(e.target.value)} spellCheck={false}
+            placeholder="/" data-testid="preview-route-input"
+            className="flex-1 min-w-0 bg-transparent px-2 text-[11px] font-mono text-foreground outline-none" />
+          <button type="submit" title="Ir para a rota" data-testid="preview-route-go"
+            className="px-1.5 text-muted-foreground hover:text-primary"><CornerDownLeft className="h-3 w-3" /></button>
+        </div>
+      </form>
+      {chips.length > 1 && (
+        <div className="flex items-center gap-1 overflow-x-auto no-scrollbar max-w-[55%]" data-testid="preview-route-chips">
+          {chips.map((r) => (
+            <button key={r} onClick={() => onGo(r)} data-testid={`preview-route-chip-${r}`}
+              className={`shrink-0 rounded-md px-2 h-6 text-[11px] font-mono transition-colors duration-150 ${route === r ? "bg-primary text-white" : "bg-secondary text-muted-foreground hover:text-foreground"}`}>
+              {r}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function DeviceToggle({ mode, setMode }) {
@@ -54,15 +85,24 @@ function ErrorBanner({ errors, onFix, onDismiss, busy }) {
   );
 }
 
-export default function PreviewPanel({ html, building, busy, onFixErrors, onPick, project, onTogglePublic }) {
+export default function PreviewPanel({ html, building, busy, onFixErrors, onPick, project, onTogglePublic, routes = [] }) {
   const [key, setKey] = useState(0);
   const [mode, setMode] = useState("desktop");
   const [errors, setErrors] = useState([]);
   const [dismissed, setDismissed] = useState(false);
   const [inspect, setInspect] = useState(false);
+  const [route, setRoute] = useState("/");
+  const routeRef = useRef("/");
   const stage = useRef(null);
   const frameRef = useRef(null);
   const scale = useFitScale(stage, mode === "mobile");
+
+  const go = (p) => {
+    const path = p && p.startsWith("/") ? p : "/" + (p || "");
+    routeRef.current = path;
+    setRoute(path);
+    frameRef.current?.contentWindow?.postMessage({ donasNavigate: path }, "*");
+  };
 
   useEffect(() => {
     const h = (e) => {
@@ -71,11 +111,17 @@ export default function PreviewPanel({ html, building, busy, onFixErrors, onPick
       if (d.donasLog?.level === "error") setErrors((l) => (l.includes(d.donasLog.msg) ? l : [...l.slice(-4), d.donasLog.msg]));
       if (d.donasPick) onPick?.(d.donasPick);
       if (d.donasInspect === false) setInspect(false);
+      if (typeof d.donasRoute === "string") { routeRef.current = d.donasRoute; setRoute(d.donasRoute); }
     };
     window.addEventListener("message", h);
     return () => window.removeEventListener("message", h);
   }, [onPick]);
   useEffect(() => { setErrors([]); setDismissed(false); setInspect(false); }, [html, key]);
+  useEffect(() => {
+    if (!routeRef.current || routeRef.current === "/") return;
+    const t = setTimeout(() => frameRef.current?.contentWindow?.postMessage({ donasNavigate: routeRef.current }, "*"), 400);
+    return () => clearTimeout(t);
+  }, [html, key]);
   useEffect(() => {
     frameRef.current?.contentWindow?.postMessage({ donasInspect: inspect }, "*");
     if (!inspect) return;
@@ -106,6 +152,7 @@ export default function PreviewPanel({ html, building, busy, onFixErrors, onPick
           <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => setKey((k) => k + 1)} data-testid="preview-reload-btn"><RotateCw className="h-3.5 w-3.5" /></Button>
         </div>
       </div>
+      <RouteBar routes={routes} route={route} onGo={go} />
       <div ref={stage} className="flex-1 min-h-0 bg-[#111116] grid-lines relative overflow-hidden">
         {inspect && (
           <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 rounded-full bg-primary px-3 py-1 text-[11px] text-white shadow-lg pointer-events-none" data-testid="preview-inspect-hint">

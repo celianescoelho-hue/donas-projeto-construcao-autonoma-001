@@ -90,9 +90,36 @@ try{document.cookie}catch(e){try{Object.defineProperty(document,'cookie',{get:fu
 </script>`;
 
 const envScript = (env) => `<script>window.__DONAS_ENV__=${JSON.stringify(env || {}).replace(/</g, "\\u003c")};</script>`;
+const routeScript = (initialPath) => `<script>window.__donasInitialPath=${JSON.stringify(initialPath || "/")};</script>`;
 
-export function buildPreview(files, assetUrls, env = {}) {
-  const head = envScript(env) + errorScript + inspectScript;
+export function extractRoutes(files) {
+  const map = Object.fromEntries((files || []).map((f) => [f.path, f]));
+  let content = "";
+  for (const root of ["frontend/src", "src", "client/src", "web/src", ""]) {
+    for (const n of ["App.js", "App.jsx", "App.tsx"]) {
+      const p = root ? `${root}/${n}` : n;
+      if (map[p]) content += "\n" + (map[p].content || "");
+    }
+  }
+  if (!content) return [];
+  const set = new Set();
+  const re = /<Route\b[^>]*?\bpath\s*=\s*(?:["'`]([^"'`]*)["'`]|\{\s*["'`]([^"'`]*)["'`]\s*\})/g;
+  let m;
+  while ((m = re.exec(content))) {
+    let pth = m[1] != null ? m[1] : m[2];
+    if (pth == null) continue;
+    if (pth === "*" || pth === "") continue;
+    if (!pth.startsWith("/")) pth = "/" + pth;
+    set.add(pth);
+  }
+  const arr = Array.from(set);
+  if (!arr.includes("/")) arr.unshift("/");
+  return arr;
+}
+
+
+export function buildPreview(files, assetUrls, env = {}, initialPath = "/") {
+  const head = envScript(env) + routeScript(initialPath) + errorScript + inspectScript;
   const map = Object.fromEntries(files.map((f) => [f.path, f]));
   const urls = [];
   const modules = [];
@@ -207,7 +234,27 @@ export function buildPreview(files, assetUrls, env = {}) {
   };
 
   let shim = null;
-  const routerShim = () => shim || (shim = mkBlob(`export * from "${RR_URL}";\nexport { MemoryRouter as BrowserRouter } from "${RR_URL}";`));
+  const routerShim = () => shim || (shim = mkBlob(`import * as RR from "${RR_URL}";
+import { createElement as h, useEffect } from "react";
+export * from "${RR_URL}";
+function DonasNav(){
+  var nav = RR.useNavigate();
+  var loc = RR.useLocation();
+  var here = loc.pathname + (loc.search||'') + (loc.hash||'');
+  useEffect(function(){ try{ parent.postMessage({donasRoute: here}, '*'); }catch(e){} }, [here]);
+  useEffect(function(){
+    function onMsg(e){ if(e && e.data && typeof e.data.donasNavigate === 'string'){ try{ nav(e.data.donasNavigate); }catch(err){} } }
+    window.addEventListener('message', onMsg);
+    try{ parent.postMessage({donasRoute: here}, '*'); }catch(e){}
+    return function(){ window.removeEventListener('message', onMsg); };
+  }, [nav]);
+  return null;
+}
+function DonasRouter(props){
+  var initial = (typeof window!=='undefined' && window.__donasInitialPath) || '/';
+  return h(RR.MemoryRouter, { initialEntries: [initial] }, h(DonasNav, null), props && props.children);
+}
+export { DonasRouter as BrowserRouter, DonasRouter as HashRouter };`));
 
   let entryUrl;
   if (found.entry) entryUrl = compile(found.entry);

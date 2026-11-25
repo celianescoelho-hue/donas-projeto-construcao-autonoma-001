@@ -18,7 +18,7 @@ import ProjectSettingsDialog from "@/components/workspace/ProjectSettingsDialog"
 import { Button } from "@/components/ui/button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { useApi, errMsg, streamChat } from "@/lib/api";
-import { buildPreview, emptyHtml } from "@/lib/preview";
+import { buildPreview, emptyHtml, extractRoutes } from "@/lib/preview";
 
 function useAssetUrls(api, pid, files) {
   const cache = useRef({});
@@ -288,6 +288,7 @@ export default function Workspace() {
 
   const assetUrls = useAssetUrls(api, id, files);
   const { html, building } = usePreview(files, assetUrls, env);
+  const routes = useMemo(() => extractRoutes(files), [files]);
   const selectedFile = useMemo(() => files.find((f) => f.path === selected), [files, selected]);
 
   return (
@@ -328,7 +329,7 @@ export default function Workspace() {
         <ResizableHandle />
         <ResizablePanel defaultSize={35} minSize={20}>
           <ResizablePanelGroup direction="vertical">
-            <ResizablePanel defaultSize={72} minSize={30}><PreviewPanel html={html} building={building} busy={!!live} onFixErrors={fixErrors} onPick={onPick} project={project} onTogglePublic={(v) => patchProject({ public_preview: v })} /></ResizablePanel>
+            <ResizablePanel defaultSize={72} minSize={30}><PreviewPanel html={html} building={building} busy={!!live} onFixErrors={fixErrors} onPick={onPick} project={project} onTogglePublic={(v) => patchProject({ public_preview: v })} routes={routes} /></ResizablePanel>
             <ResizableHandle />
             <ResizablePanel defaultSize={28} minSize={8}><TerminalPanel logs={logs} onClear={() => setLogs([])} /></ResizablePanel>
           </ResizablePanelGroup>
