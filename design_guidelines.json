@@ -1,0 +1,57 @@
+{
+  "theme": "dark",
+  "styling_philosophy": "Dark IDE / Code editor aesthetic: solid deep black/zinc canvas (no noisy full-screen gradients), crisp amber-orange forge accent (#FF6B2B / 20 100% 55%), high contrast typography, monospaced details, micro-borders.",
+  "colors_hsl": {
+    "background": "240 10% 4%",
+    "foreground": "0 0% 98%",
+    "card": "240 10% 6%",
+    "card_foreground": "0 0% 98%",
+    "popover": "240 10% 6%",
+    "popover_foreground": "0 0% 98%",
+    "primary": "20 100% 55%",
+    "primary_foreground": "0 0% 100%",
+    "secondary": "240 6% 12%",
+    "secondary_foreground": "0 0% 96%",
+    "muted": "240 6% 14%",
+    "muted_foreground": "240 5% 65%",
+    "accent": "20 90% 48%",
+    "accent_foreground": "0 0% 100%",
+    "destructive": "0 84% 60%",
+    "destructive_foreground": "0 0% 100%",
+    "border": "240 6% 18%",
+    "input": "240 6% 18%",
+    "ring": "20 100% 55%",
+    "diff_add": "142 71% 45%",
+    "diff_del": "0 84% 60%"
+  },
+  "fonts": {
+    "heading": "'Cabinet Grotesk', 'Plus Jakarta Sans', sans-serif",
+    "body": "'Plus Jakarta Sans', 'Inter', sans-serif",
+    "mono": "'JetBrains Mono', 'Fira Code', monospace",
+    "google_fonts_import": "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+  },
+  "layout_and_panels": {
+    "workspace_structure": "3 resizable columns or responsive flex/grid: Panel 1 (Chat AI + OpenRouter model picker + upload + change summaries '+3/-1' with modal diff view), Panel 2 (File tree explorer + Code editor textarea with line numbers & syntax highlight styling), Panel 3 (Interactive live preview iframe with reload & device toggle buttons)",
+    "nav_bar": "Solid background #0d0d11 with 1px border-b border-border/80, non-transparent, displays 'Forja' brand icon (hammer/anvil fire vibe), active project title, model tag, Clerk user avatar/Google status, and action buttons",
+    "versions_sheet": "Slide-over drawer from right showing timestamped snapshots, prompt triggers, diff stats and 'Restaurar esta versão' action",
+    "dashboard_grid": "Grid of projects with status pills, last modified relative date, quick actions (Renomear, Abrir, Push GitHub, Excluir) and 'Novo Projeto' card"
+  },
+  "key_components": {
+    "landing_page": "Hero with crisp pitch 'Crie sites e apps completos com sua própria IA OpenRouter', Google/Clerk sign-in button, live simulated IDE demo preview, feature bento cards (Sua API Key, Sem bloqueios, Streaming veloz, Git Push)",
+    "chat_panel": "Floating pill for model selection (Claude 3.5 Sonnet, GPT-4o, DeepSeek R1, Llama 3.3 via OpenRouter), markdown code responses, streaming typewriter effect, file modification badge pills (+4/-2)",
+    "diff_dialog": "Side-by-side or unified green/red diff viewer for modified files with line changes and accept/reject controls",
+    "settings_modal": "Input fields for OpenRouter API Key (masked with reveal toggle and validation test button) and GitHub Personal Access Token",
+    "admin_panel": "Compact metrics (Total Projetos, Usuários Ativos, Tokens Consumidos, Modelos Ativos), users data table with toggle-block status, daily limit setter, and recent generation logs"
+  },
+  "motion_and_feedback": {
+    "file_tree_entry": "Staggered fade-in (opacity 0 to 1, y: 4px to 0, duration: 150ms)",
+    "streaming_indicator": "Subtle pulsing amber-orange dot indicator in chat header",
+    "diff_chips": "Pop-in bounce animation for '+3 / -1' change badges",
+    "transitions": "Specific transitions only: 'transition: transform 0.15s ease, opacity 0.15s ease, border-color 0.15s ease'. Never apply universal 'transition: all'"
+  },
+  "accessibility_and_testing": {
+    "contrast": "All text on dark surfaces meets minimum 4.5:1 ratio; labels in muted-foreground stay clearly readable (#a1a1aa)",
+    "test_attributes": "All buttons, inputs, tabs, model selects, project cards, and modals MUST include explicit data-testid attributes (e.g. data-testid='openrouter-api-key-input', data-testid='chat-submit-button', data-testid='new-project-button', data-testid='diff-view-dialog')",
+    "language": "Portuguese UI (Português do Brasil): 'Novo Projeto', 'Publicar no GitHub', 'Chave OpenRouter', 'Prévia em Tempo Real', 'Histórico de Versões', 'Salvar Alterações'"
+  }
+}
