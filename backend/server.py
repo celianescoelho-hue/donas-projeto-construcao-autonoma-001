@@ -430,9 +430,9 @@ def is_busy(pid: str) -> bool:
     return True
 
 
-def acquire(pid: str, user_id: str) -> str:
+def acquire(pid: str, user_id: str, kind: str = "chat") -> str:
     token = new_id()
-    RUNNING[pid] = {"user": user_id, "token": token, "task": None, "started": time.monotonic()}
+    RUNNING[pid] = {"user": user_id, "token": token, "task": None, "started": time.monotonic(), "kind": kind}
     return token
 
 
@@ -461,7 +461,10 @@ async def chat(pid: str, body: ChatIn, member: dict = Depends(active_member)):
 @api.post("/projects/{pid}/cancel")
 async def cancel_chat(pid: str, member: dict = Depends(current_member)):
     await get_project(pid, member)
-    e = RUNNING.pop(pid, None)
+    e = RUNNING.get(pid)
+    if e and e.get("kind") != "chat":
+        raise HTTPException(status_code=409, detail="Uma importação do GitHub está em andamento; aguarde terminar.")
+    RUNNING.pop(pid, None)
     task = (e or {}).get("task")
     if task is not None and not task.done():
         task.cancel()
@@ -622,13 +625,13 @@ async def import_into_project(pid: str, body: ImportIn, member: dict = Depends(a
     await get_project(pid, member)
     if is_busy(pid):
         raise HTTPException(status_code=409, detail="Este projeto está ocupado (IA ou importação em andamento).")
-    token = acquire(pid, member["user_id"])
+    token = acquire(pid, member["user_id"], "import")
     try:
         if await db.files.count_documents({"project_id": pid}) > 0:
             raise HTTPException(status_code=409, detail="Este projeto já tem arquivos. Crie um projeto novo para importar um repositório.")
-        token = await github_token(member)
+        gh_token = await github_token(member)
         try:
-            return await populate_from_github(pid, body, member, token)
+            return await populate_from_github(pid, body, member, gh_token)
         except Exception:
             await db.files.delete_many({"project_id": pid})
             raise

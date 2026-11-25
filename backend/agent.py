@@ -196,6 +196,7 @@ class Agent:
         self.tokens = 0
         self.unknown_streak = 0
         self.warnings: list = []
+        self.stream_buf = ""
 
     async def emit(self, event: dict):
         await self.q.put(event)
@@ -497,6 +498,7 @@ class Agent:
         payload = {"model": model, "messages": messages, "tools": TOOLS, "tool_choice": "auto",
                    "stream": True, "max_tokens": 8000, "temperature": 0.2}
         text, calls, usage, gen_id, finish = "", {}, None, None, None
+        self.stream_buf = ""
         async with client.stream("POST", f"{OPENROUTER_BASE}/chat/completions", headers=headers, json=payload) as r:
             if r.is_error:
                 body = (await r.aread()).decode(errors="replace")
@@ -525,6 +527,7 @@ class Agent:
                 delta = choice.get("delta") or {}
                 if delta.get("content"):
                     text += delta["content"]
+                    self.stream_buf = text
                     await self.emit({"type": "token", "text": delta["content"]})
                 for tc in delta.get("tool_calls") or []:
                     slot = calls.setdefault(tc.get("index", 0), {"id": None, "name": "", "arguments": ""})
@@ -557,6 +560,7 @@ class Agent:
             async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20, read=180, write=60, pool=20)) as client:
                 for _ in range(MAX_STEPS):
                     text, calls, usage, gen_id, finish = await self.call_model(client, headers, model, messages)
+                    self.stream_buf = ""
                     await self.record_usage(model, usage, gen_id, key_source)
                     if text:
                         self.text += text + "\n"
@@ -598,6 +602,8 @@ class Agent:
                 else:
                     self.text += "\n(Limite de passos atingido — envie 'continue' para seguir.)"
         except asyncio.CancelledError:
+            if self.stream_buf:
+                self.text += self.stream_buf + "\n"
             error = "Execução interrompida (botão Parar, conexão caiu ou tempo limite). O que já foi feito ficou salvo."
             raise
         except Exception as e:

@@ -1,0 +1,42 @@
+{
+  "summary": "Tested the fix for the chat lock getting stuck, the /cancel route, the Stop button, and the search_in_files schema. Backend: 15/15 API lock checks passed, 17/17 search-tool unit checks passed, and the unknown-tool regression still gives 'model calls: 2'. The real Qwen3 Coder Next check passed: it called search_in_files with the non-empty query 'Cliques' and answered frontend/src/pages/Home.jsx line 2. Frontend: the Parar button flow works end to end, and a simulated stream drop (Playwright route returning an SSE body with no 'done' event) calls /cancel and shows the 'A conexão com a IA caiu' error. Found and fixed one more lock leak in import_into_project: the lock token variable was overwritten by the GitHub PAT, so release() never matched.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/projects/{pid}/github/import", "issue": "FIXED BY TESTER: `token = acquire(...)` was later overwritten by `token = await github_token(member)`. The finally block then called release(pid, <github PAT>), which never matches the lock token. After a successful (or failed) GitHub import into an existing project, the project stayed locked for 15 min (RUN_TTL) with 'A IA já está trabalhando'. I renamed the PAT variable to gh_token. I could not run the success path because the test users have no GitHub PAT; only the compile check and the 409/400 paths were exercised."},
+      {"endpoint": "POST /api/projects/{pid}/cancel", "issue": "It pops RUNNING without checking what holds the lock, so it also clears a GitHub-import lock. The import keeps running and a chat could then start at the same time. Low risk."},
+      {"endpoint": "agent cancel path", "issue": "When Stop is pressed, the text already streamed (several sentences were visible in the live block) is not saved. The saved assistant message only has the 'Execução interrompida' error and empty content. Consider adding the partial streamed text to self.text on CancelledError so the 'O que já foi feito ficou salvo' message also covers the text."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter6_cancel_lock.py",
+    "/app/backend/tests/test_iter6_search_tool.py",
+    "/app/backend/tests/test_iter6_real_search.py",
+    "/app/backend/tests/test_unknown_tool.py"
+  ],
+  "action_items": [
+    "Review the import_into_project token rename made by the tester (server.py ~line 629) and, if possible, test a real GitHub import into an empty project, then send a chat right after (should be 200, not 409).",
+    "Optional: make /cancel only clear chat locks, e.g. store a 'kind' in the RUNNING entry.",
+    "Optional: keep the partial streamed text in the saved message when a run is cancelled."
+  ],
+  "critical_code_review_comments": [
+    "server.py import_into_project: the lock token was shadowed by the GitHub PAT, so the lock was never released (fixed).",
+    "server.py is_busy: clears entries whose task is done or that are older than RUN_TTL (15 min) and cancels the leftover task. OK. A GitHub import lock has task=None, so only the TTL can clear it if release fails.",
+    "server.py events() finally: cancels the task when the client disconnects and releases the lock using the token. runner finally also releases using the token. Token matching keeps an old run from releasing a newer lock. OK.",
+    "agent.py: CancelledError sets the 'Execução interrompida' error, and _finish runs inside asyncio.shield, so the message is saved even when the task is cancelled. Verified in the DB.",
+    "Workspace.jsx: on Stop, the stream abort raises AbortError, so the no-'done' branch does not also run. OK.",
+    "Test-writing gotcha: httpx `for l in r.iter_lines(): ... return` inside a helper closes the response when the generator is garbage-collected, which looks like a client disconnect. Reuse one iterator (see test_iter6_cancel_lock.py)."
+  ],
+  "updated_files": ["/app/backend/server.py", "/app/backend/tests/test_iter6_cancel_lock.py", "/app/backend/tests/test_iter6_search_tool.py", "/app/backend/tests/test_iter6_real_search.py"],
+  "success_rate": {"backend": "100% (15/15 lock API + 17/17 search unit + real model check + regression)", "frontend": "100% (Stop flow, new message after Stop with no 409, drop -> /cancel + 'caiu' error)"},
+  "seed_data_creation": "Only TEST_ projects (TEST_iter6_locks, TEST_iter6_rca, TEST_iter6_ui_stop), all deleted. The main agent's scratch project from /root/locktest_pid (3a3ff55b...) was also deleted. Two messages (user + assistant) were added to member project 90476221 by the requested real model check.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend && python tests/test_iter6_cancel_lock.py (about 6 chat runs; the member's chat rate limit is 8/min) and python tests/test_iter6_search_tool.py (no LLM). The backend hot-reloads when files in tests/ change (WatchFiles), so create test files before starting streams. In the UI, the Stop button is data-testid=chat-stop-button and errors show in chat-error.",
+  "rca of the issue": "Original bug: the lock was not released when the SSE client disconnected. Fixed with the events() finally (cancel the task and release by token), the runner finally, the /cancel route, and the is_busy stale cleanup. Verified: after a disconnect a new chat returns 200 within about 2.7 s, and the log shows 'client disconnected, cancelling agent'. A second leak of the same kind existed in import_into_project (token shadowing) and is now fixed."
+}
