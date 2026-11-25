@@ -144,6 +144,7 @@ class ProjectIn(BaseModel):
 class ProjectPatch(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=80)
     model: Optional[str] = None
+    public_preview: Optional[bool] = None
 
 
 def project_doc(member, name, extra=None):
@@ -182,9 +183,13 @@ async def patch_project(pid: str, body: ProjectPatch, member: dict = Depends(cur
         if body.model not in [m["id"] for m in s["enabled_models"]]:
             raise HTTPException(status_code=400, detail="Modelo não liberado.")
         upd["model"] = body.model
+    if body.public_preview is not None:
+        upd["public_preview"] = body.public_preview
     if upd:
         await db.projects.update_one({"id": pid}, {"$set": upd})
-    return await get_project(pid, member)
+    p = await get_project(pid, member)
+    p.pop("env_enc", None)
+    return p
 
 
 @api.delete("/projects/{pid}")
@@ -211,6 +216,37 @@ async def get_project_full(pid: str, member: dict = Depends(current_member)):
     p["env_keys"] = list(load_env(p))
     p.pop("env_enc", None)
     return {"project": p, "files": [public_file(f) for f in files]}
+
+
+PUBLIC_HIDDEN = re.compile(r"(^|/)(backend/|\.env)|\.(py|pdf|zip)$|(^|/)requirements\.txt$", re.I)
+
+
+async def public_project(pid: str) -> dict:
+    p = await db.projects.find_one({"id": pid, "public_preview": True}, {"_id": 0})
+    if not p:
+        raise HTTPException(status_code=404, detail="Esta prévia não é pública ou não existe.")
+    return p
+
+
+@api.get("/public/projects/{pid}/preview")
+async def public_preview(pid: str):
+    p = await public_project(pid)
+    files = await db.files.find({"project_id": pid}, {"_id": 0}).sort("path", 1).to_list(5000)
+    env = {k: v for k, v in load_env(p).items() if k.startswith(("REACT_APP_", "VITE_"))}
+    stamp = max([f.get("updated_at") or "" for f in files] + [p.get("updated_at") or ""]) + f"|{len(files)}|{json.dumps(env, sort_keys=True)}"
+    return {"name": p["name"], "updated_at": stamp, "env": env,
+            "files": [public_file(f) for f in files if not PUBLIC_HIDDEN.search(f["path"])
+                      and (f["kind"] == "text" or f.get("content_type") in IMAGE_TYPES.values())]}
+
+
+@api.get("/public/projects/{pid}/asset")
+async def public_asset(pid: str, path: str = Query(...)):
+    await public_project(pid)
+    f = await db.files.find_one({"project_id": pid, "path": clean_path(path)}, {"_id": 0})
+    if not f or f["kind"] != "binary" or f.get("content_type") not in IMAGE_TYPES.values() or PUBLIC_HIDDEN.search(f["path"]):
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado")
+    data, _ = await run_in_threadpool(get_object, f["storage_path"])
+    return Response(content=data, media_type=f["content_type"], headers={"Cache-Control": "public, max-age=300"})
 
 
 ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,79}$")

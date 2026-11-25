@@ -2,7 +2,7 @@ import { ACCEPT } from "@/components/workspace/AttachmentChips";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { toast } from "sonner";
-import { History, Download, Github, KeyRound } from "lucide-react";
+import { History, Download, Github, KeyRound, Settings2 } from "lucide-react";
 import AppHeader from "@/components/AppHeader";
 import ChatPanel from "@/components/workspace/ChatPanel";
 import FileTree from "@/components/workspace/FileTree";
@@ -14,6 +14,7 @@ import PushDialog from "@/components/workspace/PushDialog";
 import TerminalPanel from "@/components/workspace/TerminalPanel";
 import ImportDialog from "@/components/ImportDialog";
 import EnvDialog from "@/components/workspace/EnvDialog";
+import ProjectSettingsDialog from "@/components/workspace/ProjectSettingsDialog";
 import { Button } from "@/components/ui/button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { useApi, errMsg, streamChat } from "@/lib/api";
@@ -72,6 +73,7 @@ export default function Workspace() {
   const [pushOpen, setPushOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [envOpen, setEnvOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [env, setEnv] = useState({});
   const [inject, setInject] = useState(null);
   const [fresh, setFresh] = useState(new Set());
@@ -216,6 +218,17 @@ export default function Workspace() {
     } catch (e) { toast.error(errMsg(e)); }
   };
 
+  const patchProject = async (body) => {
+    try {
+      const r = await api.patch(`/projects/${id}`, body);
+      setProject((p) => ({ ...p, ...r.data }));
+      if ("public_preview" in body) {
+        toast.success(body.public_preview ? "Link Preview público ativado" : "Link Preview público desativado");
+        log("info", `link público ${body.public_preview ? "ativado" : "desativado"} · /p/${id}/live`);
+      } else toast.success("Projeto atualizado");
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
   const fixErrors = (errs) => {
     if (live) return toast.error("A IA já está trabalhando.");
     log("info", `auto-fix · enviando ${errs.length} erro(s) da prévia para a IA`);
@@ -255,6 +268,7 @@ export default function Workspace() {
         </div>
         <div className="flex gap-1 ml-4">
           <Button size="sm" variant="ghost" onClick={() => setVersionsOpen(true)} data-testid="open-versions-btn"><History className="h-4 w-4 md:mr-1.5" /><span className="hidden md:inline">Versões</span></Button>
+          <Button size="sm" variant="ghost" onClick={() => setSettingsOpen(true)} data-testid="open-project-settings-btn" title="Configurações do projeto"><Settings2 className="h-4 w-4" /></Button>
           <Button size="sm" variant="ghost" onClick={() => setEnvOpen(true)} data-testid="open-env-btn"><KeyRound className="h-4 w-4 md:mr-1.5" /><span className="hidden md:inline">.env{Object.keys(env).length ? ` (${Object.keys(env).length})` : ""}</span></Button>
           <Button size="sm" variant="ghost" onClick={downloadZip} data-testid="download-zip-btn"><Download className="h-4 w-4 md:mr-1.5" /><span className="hidden md:inline">.zip</span></Button>
           <Button size="sm" variant="secondary" onClick={() => setPushOpen(true)} data-testid="open-push-btn"><Github className="h-4 w-4 md:mr-1.5" /><span className="hidden md:inline">Enviar ao GitHub</span></Button>
@@ -282,7 +296,7 @@ export default function Workspace() {
         <ResizableHandle />
         <ResizablePanel defaultSize={35} minSize={20}>
           <ResizablePanelGroup direction="vertical">
-            <ResizablePanel defaultSize={72} minSize={30}><PreviewPanel html={html} building={building} busy={!!live} onFixErrors={fixErrors} onPick={onPick} /></ResizablePanel>
+            <ResizablePanel defaultSize={72} minSize={30}><PreviewPanel html={html} building={building} busy={!!live} onFixErrors={fixErrors} onPick={onPick} project={project} onTogglePublic={(v) => patchProject({ public_preview: v })} /></ResizablePanel>
             <ResizableHandle />
             <ResizablePanel defaultSize={28} minSize={8}><TerminalPanel logs={logs} onClear={() => setLogs([])} /></ResizablePanel>
           </ResizablePanelGroup>
@@ -298,6 +312,7 @@ export default function Workspace() {
         const first = d?.files.find((f) => /App\.(jsx?|tsx)$/.test(f.path)) || d?.files[0];
         if (first) setSelected(first.path);
       }} />
+      <ProjectSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} project={project} onPatch={patchProject} />
       <EnvDialog open={envOpen} onOpenChange={setEnvOpen} api={api} projectId={id}
         onSaved={(vars) => { setEnv(Object.fromEntries(vars.map((v) => [v.key, v.value]))); log("info", `.env · ${vars.length} variável(is) injetadas na prévia`); }} />
       <DiffDialog change={diff} onClose={() => setDiff(null)} />

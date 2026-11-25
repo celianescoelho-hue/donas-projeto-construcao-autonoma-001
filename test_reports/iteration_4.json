@@ -1,0 +1,35 @@
+{
+  "summary": "Iteration 4: tested chat attachments (A1-A4) and the 5 tools (B1-B5) on the backend and the UI. Backend: the new pytest file tests/test_iter4_attach_tools.py passes 13 of 14 tests. It covers upload of pdf/zip/html, the 10 MB limit, read_file for PDFs and the long-line budget, move_or_copy_file, clean_external_links (byte-identical check on 153 KB), extract_zip, search_in_files, the empty-response error, the length warning, the attachments note, env GET/PUT, and restore before/after. The one failure is minor: PATCH /projects/{pid} leaks env_enc. The regression tests pass: test_donas_api.py 22 passed and 1 skipped, and test_unknown_tool.py gives 'model calls: 2'. UI: tested the env dialog and env injection into the preview, the preview error banner, 'Corrigir com IA' (real call), the restore 409 during a run, the Desfazer confirm, the Versões undo and restore buttons, Inspect, the Desktop/Celular toggle, and the chat attachments end to end (clip, chips, remove, drag-and-drop, paste over 6000 chars, real call that used move_or_copy_file and clean_external_links). I found and fixed one Inspect bug. One small UX bug is left: Esc does not cancel Inspect unless focus is inside the iframe.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PATCH /api/projects/{pid}", "issue": "The response is the raw get_project() document, so it includes env_enc (the encrypted ciphertext). GET /projects and GET /projects/{pid} strip it. Fix: pop env_enc in patch_project (or in a shared serializer)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "lib/preview.js inspectScript", "issue": "FIXED BY TESTER. The inspect script is a JS template literal, so '\\s' turned into 's' in the generated regexes. Effects: the picked element text had every letter 's' replaced by a space ('Cliques: 0' became 'Clique : 0'), the tag snippet kept data-donas-src, and className split on 's'. Changed to '\\\\s' in lines 65-77 and checked in the UI: the text is 'Cliques: 0' and the tag is '<button>'.", "selector": "[data-testid=chat-input]", "priority": "MEDIUM"},
+      {"component": "PreviewPanel Inspect", "issue": "Esc only cancels Inspect if the keydown happens inside the iframe. After clicking preview-inspect-btn, focus stays in the parent page, so pressing Esc does nothing and preview-inspect-hint stays visible. Fix: add a window keydown listener in PreviewPanel while inspect is on that calls setInspect(false).", "selector": "[data-testid=preview-inspect-btn]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter4_attach_tools.py", "/app/backend/tests/iter4_setup_scratch.py", "/app/test_reports/pytest/iter4.xml"],
+  "action_items": [
+    "Strip env_enc from the PATCH /api/projects/{pid} response.",
+    "Make Esc cancel Inspect when focus is in the parent page (window keydown listener in PreviewPanel).",
+    "Optional: removing an attachment chip leaves the uploaded file in uploads/ (orphan), and re-attaching a file with the same name silently overwrites uploads/<name>. Consider a unique suffix or a warning."
+  ],
+  "critical_code_review_comments": [
+    "In the real run the model copied page.html instead of moving it, although the prompt said 'Mova' (move_or_copy_file defaults to mode=copy). This is model behaviour, not a code bug. The system prompt could say to pass mode='move' when the user asks to move.",
+    "server.py is 740 lines (over the 700-line guideline); consider moving the env, versions and upload routes into routers.",
+    "Templates in preview.js: any future regex inside the inspectScript/errorScript template literals must escape backslashes twice."
+  ],
+  "updated_files": ["/app/frontend/src/lib/preview.js", "/app/backend/tests/test_iter4_attach_tools.py", "/app/backend/tests/iter4_setup_scratch.py"],
+  "success_rate": {"backend": "93% (13/14; 1 minor env_enc leak on PATCH)", "frontend": "95% (all flows work after the tester fix; Esc-from-parent bug left)"},
+  "seed_data_creation": "Created the scratch projects TEST_iter4_tools (pytest fixture, auto-deleted), TEST_iter4_err and TEST_iter4_env (deleted at the end via iter4_setup_scratch.py delete). Project 90476221 was not changed (only read for Inspect). Used 2 real OpenRouter calls: the attachment move/clean run and Corrigir com IA, about US$0.002 in total.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run `pytest tests/test_iter4_attach_tools.py -n 0` (it needs serial mode because tests share module state). To create projects for UI tests, use `python tests/iter4_setup_scratch.py`; it prints the ids and `delete <ids>` cleans them up. Workspace route is /p/:id. In Playwright, use an async def dialog handler with `import asyncio` for the confirm dialogs. To test Esc inside the iframe, dispatch the KeyboardEvent in the frame document. Verified in the UI: env injection (Titulo: TEST_valor_env), the error banner, dismiss and reopen via the counter, the 409 on restore while the AI runs, undo-message-N with confirm reverting App.js, restore-version-N (mode=after), and message.attachments persisted with summary.",
+  "rca of the issue": "Inspect text corruption: inspectScript is defined with backticks, so in '/\\s+/g' the '\\s' is an unknown escape and evaluates to 's'. The iframe got '/s+/g', which replaced every 's' in the element text. Fix: write '\\\\s' inside the template literal."
+}

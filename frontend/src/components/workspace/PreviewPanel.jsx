@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { RotateCw, Monitor, Smartphone, AlertTriangle, MousePointerClick, Wand2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import SharePopover from "@/components/workspace/SharePopover";
 
 const PHONE_W = 375;
 const PHONE_H = 812;
@@ -53,7 +54,7 @@ function ErrorBanner({ errors, onFix, onDismiss, busy }) {
   );
 }
 
-export default function PreviewPanel({ html, building, busy, onFixErrors, onPick }) {
+export default function PreviewPanel({ html, building, busy, onFixErrors, onPick, project, onTogglePublic }) {
   const [key, setKey] = useState(0);
   const [mode, setMode] = useState("desktop");
   const [errors, setErrors] = useState([]);
@@ -75,7 +76,13 @@ export default function PreviewPanel({ html, building, busy, onFixErrors, onPick
     return () => window.removeEventListener("message", h);
   }, [onPick]);
   useEffect(() => { setErrors([]); setDismissed(false); setInspect(false); }, [html, key]);
-  useEffect(() => { frameRef.current?.contentWindow?.postMessage({ donasInspect: inspect }, "*"); }, [inspect]);
+  useEffect(() => {
+    frameRef.current?.contentWindow?.postMessage({ donasInspect: inspect }, "*");
+    if (!inspect) return;
+    const esc = (e) => { if (e.key === "Escape") setInspect(false); };
+    window.addEventListener("keydown", esc);
+    return () => window.removeEventListener("keydown", esc);
+  }, [inspect]);
 
   const frame = <iframe ref={frameRef} key={key} title="Prévia" srcDoc={html} data-testid="preview-iframe" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox" referrerPolicy="no-referrer" className="h-full w-full bg-white border-0" />;
 
@@ -95,6 +102,7 @@ export default function PreviewPanel({ html, building, busy, onFixErrors, onPick
             <MousePointerClick className="h-3.5 w-3.5" />
           </Button>
           <DeviceToggle mode={mode} setMode={setMode} />
+          <SharePopover project={project} onTogglePublic={onTogglePublic} />
           <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => setKey((k) => k + 1)} data-testid="preview-reload-btn"><RotateCw className="h-3.5 w-3.5" /></Button>
         </div>
       </div>

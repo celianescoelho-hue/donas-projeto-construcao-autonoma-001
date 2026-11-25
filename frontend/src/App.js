@@ -9,6 +9,7 @@ import Dashboard from "@/pages/Dashboard";
 import Workspace from "@/pages/Workspace";
 import Settings from "@/pages/Settings";
 import Admin from "@/pages/Admin";
+import LivePreview from "@/pages/LivePreview";
 
 const Protected = ({ children }) => (
   <>
@@ -29,6 +30,7 @@ function App() {
           <Route path="/" element={<><Show when="signed-out"><Landing /></Show><Show when="signed-in"><MeProvider><Dashboard /></MeProvider></Show></>} />
           <Route path="/sign-in/*" element={<AuthPage><SignIn routing="path" path="/sign-in" signUpUrl="/sign-up" withSignUp /></AuthPage>} />
           <Route path="/sign-up/*" element={<AuthPage><SignUp routing="path" path="/sign-up" signInUrl="/sign-in" /></AuthPage>} />
+          <Route path="/p/:id/live" element={<LivePreview />} />
           <Route path="/p/:id" element={<Protected><Workspace /></Protected>} />
           <Route path="/settings" element={<Protected><Settings /></Protected>} />
           <Route path="/admin" element={<Protected><Admin /></Protected>} />
