@@ -612,7 +612,7 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_role("
     if body.daily_limit_usd is not None:
         upd["daily_limit_usd"] = body.daily_limit_usd
     await db.settings.update_one({"key": "global"}, {"$set": upd})
-    return await get_settings()
+    return {**await get_settings(), "platform_key_available": bool(os.environ.get("OPENROUTER_API_KEY"))}
 
 
 @api.get("/admin/openrouter-models")

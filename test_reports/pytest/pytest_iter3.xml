@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="3" skipped="1" tests="32" time="14.448" timestamp="2026-11-25T00:52:06.927352+00:00" hostname="agent-env-0d7a6ab9-06b9-4401-af58-440643220818"><testcase classname="tests.test_iter2_fixes.TestTraversal" name="test_put_delete_asset_upload" time="1.341" /><testcase classname="tests.test_iter2_fixes.TestGithubImport" name="test_member_has_no_pat" time="0.084" /><testcase classname="tests.test_iter2_fixes.TestGithubImport" name="test_import_into_empty_project_requires_pat" time="0.188"><failure message="AssertionError: {&quot;detail&quot;:&quot;Muitas requisições. Tente de novo em 442s.&quot;}&#10;assert (429 == 400)&#10; +  where 429 = &lt;Response [429]&gt;.status_code">self = &lt;test_iter2_fixes.TestGithubImport object at 0xfe2438dcc510&gt;
+member = &lt;requests.sessions.Session object at 0xfe2438de99d0&gt;
+created_projects = ['19706bc7-f117-44c1-814e-a3d754462ca4', 'e501329f-3ab6-4fab-a703-0510303fd79a']
+
+    def test_import_into_empty_project_requires_pat(self, member, created_projects):
+        pid = _proj(member, created_projects, "TEST_ghimp_empty")
+        r = member.post(f"{API}/projects/{pid}/github/import", json={"owner": "octocat", "repo": "Hello-World", "branch": "master"})
+&gt;       assert r.status_code == 400 and "Conecte o GitHub" in r.json()["detail"], r.text
+E       AssertionError: {"detail":"Muitas requisições. Tente de novo em 442s."}
+E       assert (429 == 400)
+E        +  where 429 = &lt;Response [429]&gt;.status_code
+
+tests/test_iter2_fixes.py:43: AssertionError</failure></testcase><testcase classname="tests.test_iter2_fixes.TestGithubImport" name="test_import_into_project_with_files_409" time="0.270"><failure message="AssertionError: {&quot;detail&quot;:&quot;Muitas requisições. Tente de novo em 442s.&quot;}&#10;assert 429 == 409&#10; +  where 429 = &lt;Response [429]&gt;.status_code">self = &lt;test_iter2_fixes.TestGithubImport object at 0xfe2438dccc90&gt;
+member = &lt;requests.sessions.Session object at 0xfe2438de99d0&gt;
+created_projects = ['19706bc7-f117-44c1-814e-a3d754462ca4', 'e501329f-3ab6-4fab-a703-0510303fd79a', '39214999-66f0-4f79-8386-bed2c7a4e68d']
+
+    def test_import_into_project_with_files_409(self, member, created_projects):
+        pid = _proj(member, created_projects, "TEST_ghimp_full")
+        assert member.put(f"{API}/projects/{pid}/files", json={"path": "a.txt", "content": "x"}).status_code == 200
+        r = member.post(f"{API}/projects/{pid}/github/import", json={"owner": "o", "repo": "r", "branch": "main"})
+&gt;       assert r.status_code == 409, r.text
+E       AssertionError: {"detail":"Muitas requisições. Tente de novo em 442s."}
+E       assert 429 == 409
+E        +  where 429 = &lt;Response [429]&gt;.status_code
+
+tests/test_iter2_fixes.py:51: AssertionError</failure></testcase><testcase classname="tests.test_iter2_fixes.TestGithubImport" name="test_import_into_other_users_project_404" time="0.818" /><testcase classname="tests.test_iter2_fixes.TestGithubImport" name="test_create_import_requires_pat_and_leaves_no_project" time="0.211"><failure message="AssertionError: {&quot;detail&quot;:&quot;Muitas requisições. Tente de novo em 441s.&quot;}&#10;assert (429 == 400)&#10; +  where 429 = &lt;Response [429]&gt;.status_code">self = &lt;test_iter2_fixes.TestGithubImport object at 0xfe2438dcde90&gt;
+member = &lt;requests.sessions.Session object at 0xfe2438de99d0&gt;
+
+    def test_create_import_requires_pat_and_leaves_no_project(self, member):
+        before = len(member.get(f"{API}/projects").json())
+        r = member.post(f"{API}/projects/import", json={"owner": "octocat", "repo": "TEST_none", "branch": "main"})
+&gt;       assert r.status_code == 400 and "Conecte o GitHub" in r.json()["detail"], r.text
+E       AssertionError: {"detail":"Muitas requisições. Tente de novo em 441s."}
+E       assert (429 == 400)
+E        +  where 429 = &lt;Response [429]&gt;.status_code
+
+tests/test_iter2_fixes.py:63: AssertionError</failure></testcase><testcase classname="tests.test_iter2_fixes.TestGithubImport" name="test_import_missing_fields_422" time="0.204" /><testcase classname="tests.test_iter2_fixes.TestVersions" name="test_concurrent_saves_sequential" time="0.792" /><testcase classname="tests.test_iter2_fixes.TestVersions" name="test_save_upload_restore_sequence" time="0.704" /><testcase classname="tests.test_donas_api.TestMeModels" name="test_unauth" time="0.231" /><testcase classname="tests.test_donas_api.TestMeModels" name="test_me_member" time="0.082" /><testcase classname="tests.test_donas_api.TestMeModels" name="test_models" time="0.088" /><testcase classname="tests.test_donas_api.TestProjects" name="test_full_flow" time="2.904" /><testcase classname="tests.test_donas_api.TestProjects" name="test_isolation" time="0.254" /><testcase classname="tests.test_donas_api.TestProjects" name="test_path_traversal_rejected_cleanly" time="0.161" /><testcase classname="tests.test_donas_api.TestProjects" name="test_path_traversal_asset" time="0.169" /><testcase classname="tests.test_donas_api.TestAdmin" name="test_member_forbidden[/admin/overview]" time="0.074" /><testcase classname="tests.test_donas_api.TestAdmin" name="test_member_forbidden[/users]" time="0.074" /><testcase classname="tests.test_donas_api.TestAdmin" name="test_member_forbidden[/admin/settings]" time="0.078" /><testcase classname="tests.test_donas_api.TestAdmin" name="test_member_forbidden[/admin/usage]" time="0.073" /><testcase classname="tests.test_donas_api.TestAdmin" name="test_admin_ok[/admin/overview]" time="0.076" /><testcase classname="tests.test_donas_api.TestAdmin" name="test_admin_ok[/users]" time="0.077" /><testcase classname="tests.test_donas_api.TestAdmin" name="test_admin_ok[/admin/settings]" time="0.074" /><testcase classname="tests.test_donas_api.TestAdmin" name="test_admin_ok[/admin/usage]" time="0.080" /><testcase classname="tests.test_donas_api.TestAdmin" name="test_member_cannot_patch" time="0.168" /><testcase classname="tests.test_donas_api.TestAdmin" name="test_settings_roundtrip" time="0.390" /><testcase classname="tests.test_donas_api.TestAdmin" name="test_roles_and_last_admin" time="0.856"><skipped type="pytest.skip" message="2 admins present; cannot safely test last-admin 409">/app/backend/tests/test_donas_api.py:168: 2 admins present; cannot safely test last-admin 409</skipped></testcase><testcase classname="tests.test_donas_api.TestAdmin" name="test_block_flow" time="0.712" /><testcase classname="tests.test_donas_api.TestSettings" name="test_github_invalid" time="0.357" /><testcase classname="tests.test_donas_api.TestSettings" name="test_github_required" time="0.084" /><testcase classname="tests.test_donas_api.TestSettings" name="test_openrouter_invalid_then_429" time="1.727" /><testcase classname="tests.test_donas_api.TestSettings" name="test_short_key_422" time="0.981" /></testsuite></testsuites>

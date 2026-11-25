@@ -1,0 +1,32 @@
+{
+  "summary": "Checked the iteration-2 follow-ups. All 6 requested checks pass. (1) Chat race: 2 parallel chats gave exactly one 200 and one 409, and a new chat afterwards got 200, so RUNNING is cleared. During a running chat, an import returns 409 'ocupado'. (2) Import lock: without a PAT, import returns 400 'Conecte o GitHub' twice, and a chat right after is not 409. A project with files gets 409. (3) _extract unit check returns only src/a.js: '..' and node_modules entries are dropped, and a NUL-byte file is listed in skipped as 'binário'. (4) Admin Limite: Salvar and the input are disabled while settings load (tested with a 4 s artificial delay). Salvar is disabled for an empty value and for -1, and clicking it or pressing Enter sent no PUT. Saving 2 sent one PUT and showed the 'Limite salvo' toast. (5) The chat-empty hint shows on an empty TEST project and its button opens import-github-dialog. It does not show on project 90476221 (5 files). (6) Regression: test_unknown_tool.py still gives model calls: 2, and the preview of 90476221 renders 'Olá Forja / Cliques: 0' with no preview errors. One new minor bug found: after Salvar in Admin Limite, a false warning appears.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT /api/admin/settings", "issue": "The response is get_settings() without platform_key_available. LimitTab does setS(r.data), so after a successful save the UI shows the false warning 'A chave OpenRouter da plataforma ainda não foi configurada.' even though the key exists (GET returns true). Fix: return {**s, 'platform_key_available': bool(os.environ.get('OPENROUTER_API_KEY'))} from PUT too, or keep the flag in the frontend."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Admin LimitTab", "issue": "False 'chave OpenRouter não configurada' warning after Salvar (caused by the PUT response above)", "selector": "[data-testid=daily-limit-save]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter3_locks.py", "/app/backend/tests/test_unknown_tool.py", "/app/test_reports/pytest/pytest_iter3.xml"],
+  "action_items": [
+    "PUT /api/admin/settings: include platform_key_available in the response (or have the frontend keep the old value), so the false warning does not appear after saving"
+  ],
+  "critical_code_review_comments": [
+    "chat(): between the RUNNING check (line 334) and the set (line 340) only sync code runs (rate_limit is sync), so there is no await gap and the race is closed. The except BaseException pop covers the 402 and other early exits in _start_chat, and runner's finally covers the normal end.",
+    "import_into_project: the rate limit (5 per 10 min) is counted before the busy and has-files checks, so failed or 409 attempts also use up the quota. This is acceptable, but note it: my run used the quota, and 3 GitHub tests in test_iter2_fixes.py then got 429 for about 7 minutes. That is test interference, not a bug.",
+    "_clean drops any path that contains '..', even harmless ones like 'a/../b'. This is safe and fine.",
+    "import_repo builds the whole zip in memory (up to 200 MB) and then copies it with bytes(buf), so peak memory is about 400 MB per import. Consider passing the bytearray directly or using a SpooledTemporaryFile."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter3_locks.py"],
+  "success_rate": {"backend": "100% of the requested checks (8/8 lock checks, extract unit check, unknown-tool regression); regression suite 28 passed, 3 failed only because of the import rate-limit 429 my run triggered", "frontend": "100% of the requested checks"},
+  "seed_data_creation": "None left behind. TEST_iter3_locks and TEST_iter3_empty were created and deleted by id. The member's projects 'Agente teste' and 'Teste' were not touched. Admin daily_limit_usd was saved as 2 (it was already 2, so no change). OpenRouter: 2 short chats in test_iter3_locks.py plus the 2 model calls from the requested test_unknown_tool.py regression.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "python tests/test_iter3_locks.py makes 2 real chats and 5 import calls. That uses the whole import rate limit (5 per 10 min per user, in memory), so do not run it right before tests/test_iter2_fixes.py, or restart the backend in between. Clerk tickets are single-use, so make a new one for each browser session. GitHub import with a real PAT is still untested."
+}
