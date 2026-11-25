@@ -72,6 +72,12 @@ export default function SelfHostAuthProvider({ children }) {
     } catch { /* keep token, backend validates */ }
   }, [token]);
 
+  useEffect(() => {
+    const onUnauth = () => { localStorage.removeItem(KEY); setToken(""); };
+    window.addEventListener("donas-unauthorized", onUnauth);
+    return () => window.removeEventListener("donas-unauthorized", onUnauth);
+  }, []);
+
   const value = useMemo(() => ({
     getToken: async () => token || null,
     signOut: () => { localStorage.removeItem(KEY); setToken(""); },

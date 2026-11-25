@@ -1,0 +1,38 @@
+{
+  "summary": "Iteration 10: auth refactor (AUTH_MODE clerk/selfhost) + VPS deploy files. Preview regression (clerk): auth/mode returns {mode:'clerk',email_login:false}, POST /auth/login 404, /me /projects /models 401 without a token, /me works for member and admin, /models works, project create/list/rename/get/delete persists and cleans up. UI: Clerk ticket sign-in at /sign-in, dashboard loads, user menu visible, Novo projeto creates a project and opens the workspace (all panels render), no page errors. Selfhost module tested in its own subprocess (AUTH_MODE=selfhost, DB selfhost_test): login with wrong email or password gives 401; correct email in any letter case (with spaces) gives a JWT plus the email; require_user returns selfhost-admin/admin; missing, garbage, wrong-secret, expired and alg=none tokens give 401; current_member creates an admin member and is idempotent; missing ADMIN_EMAIL, ADMIN_PASSWORD or JWT_SECRET gives 503; AUTH_MODE=clerk makes login 404. The test user was deleted from selfhost_test (0 left). Deploy files were reviewed by reading only. They are consistent overall, but 2 real independence gaps were found (see action_items).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/projects/{pid}/upload (images/pdf/zip) and GET asset/zip", "issue": "On the VPS, binary storage still goes to Emergent object storage (core.py STORAGE_BASE=https://integrations.emergentagent.com, init_storage needs EMERGENT_LLM_KEY). backend/.env.example and DEPLOY_VPS.md do not mention it, so on a self-hosted box binary uploads will fail with a KeyError/500. Text uploads are unaffected. This goes against the '100% independent of Emergent' goal."},
+      {"endpoint": "POST /api/auth/login (selfhost)", "issue": "No rate limit on login beyond the global 600 req/min per IP. Also, the IP is taken from the first X-Forwarded-For value, which the client can spoof because nginx uses $proxy_add_x_forwarded_for. The single admin password can be brute-forced. Add rate_limit(f'login:{ip}', 5, 60), and either use X-Real-IP or set the header with $remote_addr in nginx."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Selfhost stale token", "issue": "SelfHostAuthProvider only checks exp on the client. If the token is rejected by the server (JWT_SECRET rotated, tampered token), /me gives 401, MeProvider sets me=null and the user is never sent back to the LoginScreen; only clicking 'Sair' recovers. Clear the token on a 401 from /me (code review only, not run because preview is clerk).", "affected_selectors": ["selfhost-login-form", "selfhost-logout-btn"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter10_selfhost_auth.py", "/app/backend/tests/selfhost_harness.py", "/app/backend/tests/test_iter10_clerk_regression.py", "/app/test_reports/pytest/iter10_results.xml"],
+  "action_items": [
+    "Self-host binary storage: add a local-disk (Docker volume) or S3 fallback for put_object/get_object when EMERGENT_LLM_KEY / INTEGRATION_PROXY_URL is absent, or at least document in DEPLOY_VPS.md and backend/.env.example that image/PDF/ZIP uploads need EMERGENT_LLM_KEY.",
+    "frontend/public/index.html still loads https://assets.emergent.sh/scripts/emergent-main.js (and an inline analytics snippet). This goes against 'independent of Emergent' on the VPS. Drop them when REACT_APP_AUTH_MODE=selfhost, or document it.",
+    "Add a login rate limit in self_auth.login and make the client IP non-spoofable behind nginx.",
+    "SelfHostAuthProvider: on a 401 from /me, clear localStorage donas_selfhost_token and show the LoginScreen again.",
+    "Optional: add frontend/.env.example (the review said several .env.example files exist; only the root and backend ones do, though the frontend gets its values from build args so this is not blocking)."
+  ],
+  "critical_code_review_comments": [
+    "The clerk vs selfhost choice in core.py is made once at import time from AUTH_MODE, but self_auth.login reads it on every call. That is fine, but the two must stay in sync (the docker-compose environment overrides env_file, so they do).",
+    "core.ENV comes from the CLERK_PUBLISHABLE_KEY prefix, so on the VPS every user is tagged env='preview'. This is harmless but confusing.",
+    "self_auth uses the first entry of ADMIN_EMAIL when it is a comma-separated list. DEPLOY_VPS.md should say that only a single email is supported.",
+    "docker-compose: PUBLIC_ORIGIN comes from the root .env and is used for both CORS_ORIGINS and the frontend build arg, which is consistent. Port 443 is published but nginx has no 443 server block until the user enables it (documented). Service names and ports match nginx (backend:8001, frontend:3000). Mongo data is kept in the mongo_data volume.",
+    "Dockerfiles look correct in principle: the backend runs uvicorn server:app on 8001 and .dockerignore leaves out .env and tests; the frontend runs a craco build and then serve -s build -l 3000. emergentintegrations==0.2.2 can be downloaded from the configured pip index, and litellm comes from a public Emergent asset URL. No real docker build was run."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter10_selfhost_auth.py", "/app/backend/tests/selfhost_harness.py", "/app/backend/tests/test_iter10_clerk_regression.py"],
+  "success_rate": {"backend": "100% (16/16)", "frontend": "100% (clerk sign-in, dashboard, create project and open workspace)"},
+  "seed_data_creation": "None kept. Project TEST_iter10_crud and the UI project TEST_iter10_ui were deleted. The selfhost-admin user in DB selfhost_test was deleted.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Preview runs AUTH_MODE=clerk. The selfhost path is tested with tests/selfhost_harness.py, which runs in its own subprocess with patched env and DB selfhost_test. Run with: cd /app/backend && python -m pytest tests/test_iter10_selfhost_auth.py tests/test_iter10_clerk_regression.py. The selfhost frontend (LoginScreen) cannot be exercised in the preview because REACT_APP_AUTH_MODE is baked in at build time."
+}

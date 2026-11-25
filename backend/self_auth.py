@@ -46,9 +46,16 @@ class LoginIn(BaseModel):
 
 
 @self_router.post("/auth/login")
-def login(body: LoginIn):
+def login(body: LoginIn, request: Request):
     if auth_mode() != "selfhost":
         raise HTTPException(status_code=404, detail="Login por e-mail/senha não está ativo neste ambiente.")
+    try:
+        from backend.core import rate_limit
+    except ModuleNotFoundError:
+        from core import rate_limit
+    ip = (request.headers.get("x-real-ip") or request.headers.get("x-forwarded-for", "").split(",")[0]
+          or (request.client.host if request.client else "")).strip()
+    rate_limit(f"login:{ip}", 5, 60)
     email, password = _admin_email(), os.environ.get("ADMIN_PASSWORD", "")
     if not email or not password:
         raise HTTPException(status_code=503, detail="Defina ADMIN_EMAIL e ADMIN_PASSWORD no backend/.env.")

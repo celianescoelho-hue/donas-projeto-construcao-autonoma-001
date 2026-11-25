@@ -77,7 +77,10 @@ docker compose cp mongodb:/data/db/backup.archive ./backup.archive
 
 ## Observações
 - **Modo de login:** na VPS, `AUTH_MODE=selfhost` (e-mail/senha do admin). Só o
-  `ADMIN_EMAIL` entra; não há cadastro aberto nem Google.
+  `ADMIN_EMAIL` entra; não há cadastro aberto nem Google. O login tem proteção
+  contra força bruta (5 tentativas por minuto por IP).
+- **Uploads/imagens:** ficam em disco no contêiner do backend (`STORAGE_BACKEND=local`,
+  volume `backend_storage`), sem depender do Emergent.
 - **Prévia:** a prévia ao vivo e o Link Preview público mostram o front-end
   (React) dos projetos. O back-end Python gerado é salvo e sincronizado com o
   GitHub, mas não roda dentro da plataforma.

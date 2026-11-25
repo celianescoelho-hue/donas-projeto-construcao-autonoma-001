@@ -20,6 +20,10 @@ export function useApi() {
       if (t) c.headers.Authorization = `Bearer ${t}`;
       return c;
     });
+    inst.interceptors.response.use((r) => r, (e) => {
+      if (e?.response?.status === 401) window.dispatchEvent(new Event("donas-unauthorized"));
+      return Promise.reject(e);
+    });
     inst.token = getToken;
     return inst;
   }, [getToken]);

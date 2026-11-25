@@ -262,9 +262,27 @@ def summarize_zip(data: bytes) -> str:
 
 
 # ---------- Object storage ----------
+# Two backends: Emergent object storage (preview/default) or local disk (VPS
+# self-host). Local is used when STORAGE_BACKEND=local or when there is no
+# EMERGENT_LLM_KEY, so a self-hosted box never depends on Emergent.
 STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
 STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
+STORAGE_DIR = os.environ.get("STORAGE_DIR", "/app/data/storage")
 _storage_key = None
+
+
+def _use_local_storage() -> bool:
+    mode = os.environ.get("STORAGE_BACKEND", "").strip().lower()
+    if mode == "local":
+        return True
+    if mode == "emergent":
+        return False
+    return not os.environ.get("EMERGENT_LLM_KEY")
+
+
+def _local_path(path: str) -> str:
+    safe = "/".join(p for p in path.split("/") if p not in ("", ".", ".."))
+    return os.path.join(STORAGE_DIR, safe)
 
 
 def init_storage(force: bool = False):
@@ -278,6 +296,14 @@ def init_storage(force: bool = False):
 
 
 def put_object(path: str, data: bytes, content_type: str) -> dict:
+    if _use_local_storage():
+        fp = _local_path(path)
+        os.makedirs(os.path.dirname(fp), exist_ok=True)
+        with open(fp, "wb") as fh:
+            fh.write(data)
+        with open(fp + ".type", "w") as fh:
+            fh.write(content_type or "application/octet-stream")
+        return {"path": path}
     for attempt in range(2):
         resp = requests.put(f"{STORAGE_URL}/objects/{path}",
                             headers={"X-Storage-Key": init_storage(force=attempt > 0), "Content-Type": content_type},
@@ -289,6 +315,17 @@ def put_object(path: str, data: bytes, content_type: str) -> dict:
 
 
 def get_object(path: str) -> tuple[bytes, str]:
+    if _use_local_storage():
+        fp = _local_path(path)
+        if not os.path.exists(fp):
+            raise HTTPException(status_code=404, detail="Arquivo não encontrado")
+        with open(fp, "rb") as fh:
+            data = fh.read()
+        ct = "application/octet-stream"
+        if os.path.exists(fp + ".type"):
+            with open(fp + ".type") as fh:
+                ct = fh.read().strip() or ct
+        return data, ct
     resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": init_storage()}, timeout=60)
     if resp.status_code == 404:
         resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": init_storage(True)}, timeout=60)

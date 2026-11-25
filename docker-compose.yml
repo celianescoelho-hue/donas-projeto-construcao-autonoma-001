@@ -15,10 +15,14 @@ services:
       MONGO_URL: mongodb://mongodb:27017
       DB_NAME: donas
       AUTH_MODE: selfhost
+      STORAGE_BACKEND: local
+      STORAGE_DIR: /app/data/storage
       CORS_ORIGINS: ${PUBLIC_ORIGIN}
     depends_on: [mongodb]
     networks: [donas]
     expose: ["8001"]
+    volumes:
+      - backend_storage:/app/data/storage
 
   frontend:
     build:
@@ -45,6 +49,7 @@ services:
 
 volumes:
   mongo_data:
+  backend_storage:
 
 networks:
   donas:
