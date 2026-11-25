@@ -73,6 +73,13 @@ TOOLS = [
                        "dry_run": {"type": "boolean"}}, "required": ["source"]}}},
     {"type": "function", "function": {"name": "extract_zip", "description": "Descompacta um .zip do projeto numa pasta, direto no servidor (ignora node_modules, build, .git e arquivos > 5 MB).",
         "parameters": {"type": "object", "properties": {"source": {"type": "string"}, "dest_dir": {"type": "string", "description": "Pasta destino, ex.: uploads/site"}}, "required": ["source", "dest_dir"]}}},
+    {"type": "function", "function": {"name": "html_to_js_module", "description": "Converte um .html grande (ex.: frontend/public/bling_login.html) num módulo JS 'export default \"<html>\";' dentro de frontend/src/, direto no servidor, limpando links externos e <script> antigos. Use quando a prévia não carrega um HTML da pasta public via fetch: depois é só importar no React (import html from './bling_login_raw.js') e usar com dangerouslySetInnerHTML.",
+        "parameters": {"type": "object", "properties": {
+            "html_path": {"type": "string", "description": "HTML de origem, ex.: frontend/public/bling_login.html"},
+            "js_path": {"type": "string", "description": "Destino .js dentro de frontend/src/, ex.: frontend/src/bling_login_raw.js"},
+            "keep_domains": {"type": "array", "items": {"type": "string"}, "description": "Domínios a manter nos links/estilos"},
+            "keep_stylesheets": {"type": "boolean", "description": "Manter <link rel=stylesheet> externos (padrão true)"}},
+            "required": ["html_path", "js_path"], "additionalProperties": False}}},
 ]
 
 LINK_ATTR = re.compile(r'(\s(?:href|src|action|poster|data-src|srcset)\s*=\s*)(["\'])(.*?)\2', re.I | re.S)
@@ -387,6 +394,29 @@ class Agent:
         names = ", ".join(p for p, _, _ in texts[:20])
         return f"OK: {n} arquivos extraídos de {src} para '{base or '/'}' ({len(skipped)} ignorados). Ex.: {names}"
 
+    async def _html_to_js_module(self, args):
+        src = clean_path(args["html_path"])
+        dest = clean_path(args["js_path"])
+        if not dest.startswith("frontend/src/"):
+            return "ERRO: js_path deve ficar dentro de frontend/src/ (ex.: frontend/src/bling_login_raw.js) para o React importar."
+        if not dest.endswith(".js"):
+            return "ERRO: js_path deve terminar em .js."
+        f = await self._get(src)
+        if not f or f["kind"] != "text":
+            return f"ERRO: '{src}' não existe ou não é um arquivo de texto (.html)."
+        keep = [k.strip().lower().lstrip(".") for k in (args.get("keep_domains") or []) if k and k.strip()]
+        cleaned, stats, domains = await run_in_threadpool(strip_external, f["content"], keep, args.get("keep_stylesheets", True) is not False)
+        module = "// Gerado por html_to_js_module a partir de " + src + " — não edite à mão.\nexport default " + json.dumps(cleaned) + ";\n"
+        before = await self._get(dest)
+        await self._write(dest, before, module)
+        n = module.count("\n") + 1
+        top = ", ".join(sorted(domains)[:20]) or "nenhum"
+        await self._light_card(dest, "edit" if before else "create", n, before.get("content", "").count("\n") + 1 if before else 0,
+                               f"(módulo JS gerado de {src}: {len(f['content'])//1024} KB de HTML embutido; {stats['scripts']} scripts e {stats['link_tags']} <link> externos removidos. Importe com: import html from './{dest.split('/')[-1]}')")
+        return (f"OK: {dest} criado como módulo JS (export default). HTML de {len(f['content'])} bytes embutido; "
+                f"{stats['scripts']} scripts externos e {stats['link_tags']} <link> removidos, {stats['links']} links → '#'. Domínios: {top}. "
+                f"No React: import html from './{dest.split('/')[-1]}'; e use <div dangerouslySetInnerHTML={{{{ __html: html }}}} />.")
+
     async def _get(self, path):
         return await db.files.find_one({"project_id": self.pid, "path": path}, {"_id": 0})
 
@@ -490,6 +520,8 @@ class Agent:
                 return await self._clean_links(args)
             if name == "extract_zip":
                 return await self._extract_zip(args)
+            if name == "html_to_js_module":
+                return await self._html_to_js_module(args)
             return f"ERRO: ferramenta desconhecida {name}"
         except (KeyError, ValueError) as e:
             return f"ERRO: argumentos inválidos ({e})."
