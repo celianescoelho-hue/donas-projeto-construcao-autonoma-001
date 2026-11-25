@@ -1,0 +1,42 @@
+{
+  "summary": "Tested the 'Nova conversa' (clear chat) feature, the HISTORY_LIMIT=6 history, the FAKE_LOG stripping, and the fake-claim nudge. Backend: 19/19 unit checks passed (build_messages, fake_claim, MAX_NUDGES exhaustion); 19/19 API checks passed (DELETE /messages soft delete, 409 while running, ownership 404, no auth 401, files/versions/project unchanged, archived=true and archived_at set). test_fake_claim_nudge.py passed (3 calls, force_tools [False, True, False], 1 warning, App.js saved, fake text removed). test_unknown_tool.py still gives 'model calls: 2'. Real OpenRouter check (2 runs, qwen/qwen3-coder-next): on a scratch project with 10 seeded fake-summary history messages ('Arquivo criado', '0 arquivo(s)', '[Alterações: ...]'), the prompt 'Mude o título do Home para Bem-vindo' called read_file and then replace_in_file, produced 1 real change card, changed the h1 to Bem-vindo, gave no warnings, and left no fake summary. Run 2 was a long run used to check that clear returns 409 while busy, then /cancel (was_running=true). Frontend: the chat-message-count and chat-clear-btn work end to end: confirm dialog text, toast 'Nova conversa iniciada — arquivos mantidos', chat-empty shown, count goes to 0, the button is disabled when there are no messages and while busy, the file tree is unchanged, the chat stays empty after reload, and the Stop button is visible while busy. A new message after clearing was tested with a mocked SSE /chat route, not a real model call, to stay within the OpenRouter budget.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "agent.fake_claim / CLAIM regex", "issue": "False positives on normal non-edit replies: 'Nenhum arquivo foi alterado.', 'Não editei o código ainda.', 'O arquivo criado anteriormente usa React.', 'Os arquivos salvos ficam no projeto.' all return True. On a Q&A turn with no tool calls, these trigger a nudge with tool_choice='required' (forcing a pointless tool call, plus an extra paid call) and show the misleading warning 'A IA descreveu alterações sem usar ferramentas'. Suggest skipping matches that are preceded by a negation (nenhum/não/nada) and limiting the 'arquivos? ... salvos/criados' branch to past-tense claims with a path, e.g. 'Arquivo criado:'."},
+      {"endpoint": "agent.run after MAX_NUDGES exhausted", "issue": "When both nudges fail, the last fake text (e.g. 'Arquivo criado: frontend/src/App.js') is still saved as the assistant message content, together with the 2 warnings. FAKE_LOG only strips '[Alterações: ...]', so this fake claim goes back into the next turn's history (up to 6 messages), which is the same history pollution the feature tries to prevent. Consider dropping or replacing the content when the final warning fires, or stripping CLAIM sentences from assistant history in build_messages."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter7_history_nudge_unit.py",
+    "/app/backend/tests/test_iter7_clear_chat_api.py",
+    "/app/backend/tests/iter7_ui_setup.py",
+    "/app/backend/tests/test_fake_claim_nudge.py",
+    "/app/backend/tests/test_unknown_tool.py"
+  ],
+  "action_items": [
+    "Optional: tighten the CLAIM regex to avoid false nudges on negated or descriptive sentences (see minor issue 1)",
+    "Optional: don't keep the fake-claim text in the saved assistant message or history after MAX_NUDGES is exhausted"
+  ],
+  "critical_code_review_comments": [
+    "clear_messages uses current_member, not active_member, and is not rate limited. This is fine because it is a soft delete, but the archived messages grow without limit (still deleted with the project).",
+    "The nudge only fires when change_cards is empty. A model that made 1 real edit and then falsely claims more edits is not caught. This is acceptable for now.",
+    "The frontend uses window.confirm for the clear-chat confirmation, not a shadcn AlertDialog, which is not consistent with the rest of the app's UI."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter7_history_nudge_unit.py",
+    "/app/backend/tests/test_iter7_clear_chat_api.py",
+    "/app/backend/tests/iter7_ui_setup.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "seed_data_creation": "Scratch projects TEST_iter7_clear_chat and TEST_iter7_ui_clear, plus unit project ids unit-test-iter7-history and unit-test-nudge, were created with seeded TEST_ messages and are now deleted (verified 0 projects, messages and files left). Project 90476221 was not touched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: python tests/test_iter7_history_nudge_unit.py (no OpenRouter), python tests/test_iter7_clear_chat_api.py (2 real OpenRouter runs), python tests/test_fake_claim_nudge.py, python tests/test_unknown_tool.py. For the UI, run iter7_ui_setup.py create/ticket/delete; it seeds messages directly in the DB so no model call is needed. Mock /chat with a Playwright route that returns an SSE body ending in a 'done' event.",
+  "test_credentials": "From /app/memory/test_credentials.md (Clerk ticket/JWT via tests/clerk_token.py)."
+}

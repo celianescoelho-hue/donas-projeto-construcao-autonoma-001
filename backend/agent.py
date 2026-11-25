@@ -155,9 +155,14 @@ def attachments_note(atts: list) -> str:
 HISTORY_LIMIT = 6
 MAX_NUDGES = 2
 FAKE_LOG = re.compile(r"\n?\[Altera[çc][õo]es:[^\]]*\]", re.I)
-CLAIM = re.compile(r"\[Altera[çc][õo]es:|arquivos?\s+(?:foi\s+|foram\s+)?(?:criados?|atualizados?|editados?|modificados?|alterados?|salvos?)|"
-                   r"(?:criei|atualizei|editei|modifiquei|alterei|adicionei|substitu[ií]) (?:o|a|os|as)? ?(?:arquivo|componente|p[áa]gina|c[óo]digo)|"
-                   r"(?:0|\d+) arquivo\(s\)|(?:create_file|replace_in_file|delete_file)\s*[:(]", re.I)
+CLAIM = re.compile(
+    r"\[Altera[çc][õo]es:"
+    r"|arquivos?\s+(?:criados?|atualizados?|editados?|modificados?|alterados?|salvos?)\s*[:\-–]"
+    r"|arquivos?\s+[\w./-]+\.\w{1,5}\s+(?:foi|foram)\s+(?:criados?|atualizados?|editados?|modificados?|alterados?|salvos?)"
+    r"|(?:criei|atualizei|editei|modifiquei|alterei|adicionei|substitu[ií])\s+(?:o |a |os |as )?(?:arquivo|componente|p[áa]gina|c[óo]digo)"
+    r"|\b\d+ arquivo\(s\)"
+    r"|(?:create_file|replace_in_file|delete_file)\s*[:(]", re.I)
+NEGATION = re.compile(r"\b(?:n[ãa]o|nenhum|nenhuma|nada|sem|nunca|ainda n[ãa]o)\b[^.!?\n]*$", re.I)
 TOOL_RULE = ("\n\nREGRA CRÍTICA: alterações só existem se você CHAMAR as ferramentas (tool_calls). Nunca escreva 'Arquivo criado', "
              "'[Alterações: ...]' ou um resumo de mudanças sem ter chamado create_file/replace_in_file/delete_file/move_or_copy_file antes. "
              "Se o pedido exige mudar arquivos, comece chamando as ferramentas.")
@@ -167,7 +172,10 @@ NUDGE = ("SISTEMA: sua última resposta descreveu alterações, mas você NÃO c
 
 
 def fake_claim(text: str) -> bool:
-    return bool(text and CLAIM.search(text))
+    for m in CLAIM.finditer(text or ""):
+        if not NEGATION.search(text[max(0, m.start() - 60):m.start()]):
+            return True
+    return False
 
 
 READ_BUDGET = 18000
@@ -600,6 +608,7 @@ class Agent:
                     self.force_tools = False
                     if not calls:
                         if not self.change_cards and fake_claim(text):
+                            self.text = self.text[: len(self.text) - len(text) - 1] if text else self.text
                             await self.warn("A IA afirmou ter alterado arquivos, mas não chamou nenhuma ferramenta: nenhum arquivo foi modificado. Tente 'Nova conversa' ou outro modelo.")
                         break
                     messages.append({"role": "assistant", "content": text or None, "tool_calls": [
@@ -644,7 +653,7 @@ class Agent:
             error = friendly_error(e)
             await self.emit({"type": "error", "message": error})
         finally:
-            if not error and not self.text.strip() and not self.change_cards:
+            if not error and not self.text.strip() and not self.change_cards and not self.warnings:
                 error = "O modelo não retornou nenhuma resposta (pode ter batido no limite de tokens). Tente de novo, divida o pedido ou troque de modelo."
             await asyncio.shield(self._finish(prompt, model, error))
 
