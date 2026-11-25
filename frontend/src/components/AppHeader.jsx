@@ -2,6 +2,8 @@ import { Link, NavLink } from "react-router-dom";
 import { UserButton } from "@clerk/react";
 import { Hexagon } from "lucide-react";
 import { useMe } from "@/lib/api";
+import { AUTH_MODE } from "@/lib/authContext";
+import { SelfUserButton } from "@/components/auth/SelfHostAuthProvider";
 
 export const Brand = ({ compact = false }) => (
   <Link to="/" data-testid="brand-link" className="flex items-center gap-2.5 group shrink-0">
@@ -30,7 +32,7 @@ export default function AppHeader({ children }) {
         {me?.role === "admin" && (
           <NavLink to="/admin" data-testid="nav-admin" className={({ isActive }) => `${nav} ${isActive ? "text-primary" : "text-muted-foreground"}`}>Admin</NavLink>
         )}
-        <div className="ml-2" data-testid="user-menu"><UserButton /></div>
+        <div className="ml-2" data-testid="user-menu">{AUTH_MODE === "selfhost" ? <SelfUserButton /> : <UserButton />}</div>
       </nav>
     </header>
   );

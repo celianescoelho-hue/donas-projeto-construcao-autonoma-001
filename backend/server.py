@@ -27,6 +27,11 @@ try:
 except ModuleNotFoundError:
     from clerk_auth import clerk_router
 
+try:
+    from backend.self_auth import self_router
+except ModuleNotFoundError:
+    from self_auth import self_router
+
 from core import (db, client, now, new_id, encrypt, decrypt, current_member, require_role, get_settings, get_project,
                   record_version, file_snapshot, rate_limit, summarize_text, summarize_image, store_binary, get_object, init_storage,
                   effective_role, ROLES, RANK, IN_ENV, RETIRED_ROLES, IMAGE_TYPES, OPENROUTER_BASE, logger, DOC_TYPES, summarize_pdf, summarize_zip)
@@ -822,6 +827,7 @@ async def security_middleware(request, call_next):
 
 app.include_router(api)
 app.include_router(clerk_router)
+app.include_router(self_router)
 app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
                    allow_methods=["*"], allow_headers=["*"])
 

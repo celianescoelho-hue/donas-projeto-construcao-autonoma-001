@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import axios from "axios";
-import { useAuth } from "@clerk/react";
+import { useAuthBridge } from "./authContext";
 
 export const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -12,7 +12,7 @@ export const errMsg = (e) => {
 };
 
 export function useApi() {
-  const { getToken } = useAuth();
+  const { getToken } = useAuthBridge();
   return useMemo(() => {
     const inst = axios.create({ baseURL: API });
     inst.interceptors.request.use(async (c) => {

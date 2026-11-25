@@ -1,0 +1,50 @@
+services:
+  mongodb:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    networks: [donas]
+    # Not published to the host; only the backend talks to it inside the network.
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file: ./backend/.env
+    environment:
+      MONGO_URL: mongodb://mongodb:27017
+      DB_NAME: donas
+      AUTH_MODE: selfhost
+      CORS_ORIGINS: ${PUBLIC_ORIGIN}
+    depends_on: [mongodb]
+    networks: [donas]
+    expose: ["8001"]
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Baked into the static build. Must be the public URL the browser uses.
+        REACT_APP_BACKEND_URL: ${PUBLIC_ORIGIN}
+        REACT_APP_AUTH_MODE: selfhost
+    restart: unless-stopped
+    networks: [donas]
+    expose: ["3000"]
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    depends_on: [frontend, backend]
+    networks: [donas]
+
+volumes:
+  mongo_data:
+
+networks:
+  donas:

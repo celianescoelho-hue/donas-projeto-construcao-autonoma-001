@@ -23,6 +23,8 @@
 - search_in_files (text/regex, file:line:col), preview error banner + "Corrigir com IA", rollback "Voltar para antes" per version + "Desfazer" on chat messages, per-project .env (encrypted, injected as process.env), Inspect element picker → chat reference (file:line via data-donas-src).
 - Public Link Preview /p/{id}/live (no login, front-end only, toggle in share popover + project settings, QR code, auto-refresh 10s).
 
+- Self-host deploy (VPS): AUTH_MODE env switch — "clerk" (Emergent preview, Google) or "selfhost" (own JWT, ADMIN_EMAIL+ADMIN_PASSWORD, single admin). backend/self_auth.py (/api/auth/mode, /api/auth/login), core require_user branch, frontend AuthBridge (lib/authContext.js) so useApi works in both; App.js branches ClerkApp/SelfHostApp; SelfHostAuthProvider + login screen. Deploy files at repo root: docker-compose.yml (mongo+backend+frontend+nginx), nginx.conf, DEPLOY_VPS.md, backend/Dockerfile, frontend/Dockerfile, .env.example files.
+
 ## Backlog
 - P1: run the generated Python backend in an isolated sandbox for a full-stack preview; publish to a public link.
 - P1: GitHub pull requests instead of direct pushes; real-PAT import/push E2E test.

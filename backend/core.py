@@ -17,10 +17,17 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
 from starlette.concurrency import run_in_threadpool
 
-try:
-    from backend.clerk_auth import require_user
-except ModuleNotFoundError:
-    from clerk_auth import require_user
+AUTH_MODE = os.environ.get("AUTH_MODE", "clerk").strip().lower()
+if AUTH_MODE == "selfhost":
+    try:
+        from backend.self_auth import require_user
+    except ModuleNotFoundError:
+        from self_auth import require_user
+else:
+    try:
+        from backend.clerk_auth import require_user
+    except ModuleNotFoundError:
+        from clerk_auth import require_user
 
 logger = logging.getLogger("forja")
 client = AsyncIOMotorClient(os.environ["MONGO_URL"])
@@ -100,15 +107,18 @@ async def current_member(user: dict = Depends(require_user)) -> dict:
     uid = user["user_id"]
     member = await db.users.find_one({"user_id": uid}, {"_id": 0})
     if member is None or not member.get("role"):
-        prof = await run_in_threadpool(_clerk_profile, uid)
-        role = "admin" if prof["is_admin"] else DEFAULT_ROLE
+        if AUTH_MODE == "selfhost":
+            role, email, name = user.get("role", "admin"), user.get("email", ""), user.get("email", "admin")
+        else:
+            prof = await run_in_threadpool(_clerk_profile, uid)
+            role, email, name = ("admin" if prof["is_admin"] else DEFAULT_ROLE), prof["email"], prof["name"]
         await db.users.update_one({"user_id": uid, "role": {"$in": [None, ""]}}, {"$set": {"role": role}})
         member = await db.users.find_one_and_update(
             {"user_id": uid},
-            {"$setOnInsert": {"user_id": uid, "role": role, "email": prof["email"], "name": prof["name"],
+            {"$setOnInsert": {"user_id": uid, "role": role, "email": email, "name": name,
                               "blocked": False, "created_at": now()}},
             upsert=True, projection={"_id": 0}, return_document=ReturnDocument.AFTER)
-    elif member.get("role") != "admin" and (member.get("email") or "").lower() in admin_emails():
+    elif AUTH_MODE != "selfhost" and member.get("role") != "admin" and (member.get("email") or "").lower() in admin_emails():
         prof = await run_in_threadpool(_clerk_profile, uid)
         if prof["is_admin"]:
             await db.users.update_one({"user_id": uid}, {"$set": {"role": "admin"}})
