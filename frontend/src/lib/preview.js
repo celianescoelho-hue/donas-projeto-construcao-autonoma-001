@@ -92,6 +92,38 @@ try{document.cookie}catch(e){try{Object.defineProperty(document,'cookie',{get:fu
 const envScript = (env) => `<script>window.__DONAS_ENV__=${JSON.stringify(env || {}).replace(/</g, "\\u003c")};</script>`;
 const routeScript = (initialPath) => `<script>window.__donasInitialPath=${JSON.stringify(initialPath || "/")};</script>`;
 
+// Rewrites the project's /api calls (fetch + XHR) to the real running backend via the reverse proxy.
+const apiProxyScript = (proxy) => {
+  if (!proxy || !proxy.base) return "";
+  const cfg = JSON.stringify({ base: proxy.base, token: proxy.token || "" }).replace(/</g, "\\u003c");
+  return `<script>(function(){
+  var P=${cfg};
+  function rw(u){
+    try{
+      if(typeof u!=='string') return u;
+      if(u.indexOf(P.base)===0) return u;
+      if(/^https?:\\/\\//i.test(u)){ try{ var url=new URL(u); if(/^\\/api(\\/|$)/.test(url.pathname)) return P.base+url.pathname.replace(/^\\//,'')+(url.search||''); }catch(e){} return u; }
+      if(u.indexOf('/api/')===0||u==='/api') return P.base+u.replace(/^\\//,'');
+      return u;
+    }catch(e){ return u; }
+  }
+  var of=window.fetch;
+  window.fetch=function(input,init){
+    try{
+      if(typeof input==='string') input=rw(input);
+      else if(input&&input.url) input=new Request(rw(input.url),input);
+    }catch(e){}
+    init=init||{};
+    try{ var h=new Headers(init.headers||(input&&input.headers)||{}); if(P.token) h.set('X-Preview-Token',P.token); init.headers=h; }catch(e){}
+    return of(input,init);
+  };
+  var oo=XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open=function(m,u){ try{ var nu=rw(u); this.__dp=(nu!==u); arguments[1]=nu; }catch(e){} return oo.apply(this,arguments); };
+  var osend=XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.send=function(b){ try{ if(this.__dp&&P.token) this.setRequestHeader('X-Preview-Token',P.token); }catch(e){} return osend.apply(this,arguments); };
+})();</script>`;
+};
+
 export function extractRoutes(files) {
   const map = Object.fromEntries((files || []).map((f) => [f.path, f]));
   let content = "";
@@ -118,8 +150,9 @@ export function extractRoutes(files) {
 }
 
 
-export function buildPreview(files, assetUrls, env = {}, initialPath = "/") {
-  const head = envScript(env) + routeScript(initialPath) + errorScript + inspectScript;
+export function buildPreview(files, assetUrls, env = {}, initialPath = "/", proxy = null) {
+  const penv = proxy ? { ...env, REACT_APP_BACKEND_URL: "", VITE_BACKEND_URL: "", VITE_API_URL: "" } : env;
+  const head = apiProxyScript(proxy) + envScript(penv) + routeScript(initialPath) + errorScript + inspectScript;
   const map = Object.fromEntries(files.map((f) => [f.path, f]));
   const urls = [];
   const modules = [];

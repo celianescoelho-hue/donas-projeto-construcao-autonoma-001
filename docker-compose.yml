@@ -17,6 +17,7 @@ services:
       AUTH_MODE: selfhost
       STORAGE_BACKEND: local
       STORAGE_DIR: /app/data/storage
+      PREVIEW_DIR: /tmp/donas_previews
       CORS_ORIGINS: ${PUBLIC_ORIGIN}
     depends_on: [mongodb]
     networks: [donas]

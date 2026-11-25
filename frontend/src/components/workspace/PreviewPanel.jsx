@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { RotateCw, Monitor, Smartphone, AlertTriangle, MousePointerClick, Wand2, X, CornerDownLeft } from "lucide-react";
+import { RotateCw, Monitor, Smartphone, AlertTriangle, MousePointerClick, Wand2, X, CornerDownLeft, Server, Loader2, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import SharePopover from "@/components/workspace/SharePopover";
 
@@ -52,6 +52,45 @@ function RouteBar({ routes, route, onGo }) {
   );
 }
 
+const BACKEND_UI = {
+  running: { label: "Back-end rodando", color: "text-[hsl(var(--diff-add))]", dot: "bg-[hsl(var(--diff-add))]" },
+  installing: { label: "Instalando dependências…", color: "text-[hsl(var(--gold))]", dot: "bg-[hsl(var(--gold))] animate-pulse" },
+  starting: { label: "Iniciando back-end…", color: "text-[hsl(var(--gold))]", dot: "bg-[hsl(var(--gold))] animate-pulse" },
+  error: { label: "Erro no back-end", color: "text-red-400", dot: "bg-red-500" },
+  no_backend: { label: "Sem back-end Python", color: "text-muted-foreground", dot: "bg-muted-foreground" },
+  stopped: { label: "Back-end parado", color: "text-muted-foreground", dot: "bg-muted-foreground" },
+};
+
+function BackendBar({ backend, onRun }) {
+  const [open, setOpen] = useState(false);
+  const st = backend?.status || "stopped";
+  const ui = BACKEND_UI[st] || BACKEND_UI.stopped;
+  const busy = st === "installing" || st === "starting";
+  const log = (backend?.log || "") + (backend?.runtime_log ? "\n" + backend.runtime_log : "");
+  if (st === "no_backend") return null;
+  return (
+    <div className="shrink-0 border-b bg-[#0d0d11]" data-testid="preview-backend-bar">
+      <div className="h-9 flex items-center gap-2 px-2">
+        <Server className="h-3.5 w-3.5 text-primary shrink-0" />
+        <span className={`h-2 w-2 rounded-full shrink-0 ${ui.dot}`} />
+        <button onClick={() => setOpen((o) => !o)} className={`text-[11px] font-mono truncate ${ui.color}`} data-testid="preview-backend-status">
+          {ui.label}
+        </button>
+        <div className="ml-auto flex items-center gap-1">
+          {busy && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+          <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={onRun} disabled={busy} data-testid="preview-backend-run-btn">
+            {st === "running" ? <><RotateCw className="h-3 w-3 mr-1" />Reiniciar</> : <><Play className="h-3 w-3 mr-1" />Rodar back-end</>}
+          </Button>
+          {log && <button onClick={() => setOpen((o) => !o)} className="text-[10px] text-muted-foreground hover:text-foreground px-1" data-testid="preview-backend-log-toggle">logs</button>}
+        </div>
+      </div>
+      {open && log && (
+        <pre className="max-h-40 overflow-auto px-3 pb-2 text-[10.5px] leading-5 font-mono text-muted-foreground whitespace-pre-wrap" data-testid="preview-backend-log">{log}</pre>
+      )}
+    </div>
+  );
+}
+
 function DeviceToggle({ mode, setMode }) {
   const item = (m, Icon, label) => (
     <button onClick={() => setMode(m)} data-testid={`preview-${m}-btn`}
@@ -85,7 +124,7 @@ function ErrorBanner({ errors, onFix, onDismiss, busy }) {
   );
 }
 
-export default function PreviewPanel({ html, building, busy, onFixErrors, onPick, project, onTogglePublic, routes = [] }) {
+export default function PreviewPanel({ html, building, busy, onFixErrors, onPick, project, onTogglePublic, routes = [], backend, onRunBackend }) {
   const [key, setKey] = useState(0);
   const [mode, setMode] = useState("desktop");
   const [errors, setErrors] = useState([]);
@@ -161,6 +200,7 @@ export default function PreviewPanel({ html, building, busy, onFixErrors, onPick
         </div>
       </div>
       <RouteBar routes={routes} route={route} onGo={go} />
+      <BackendBar backend={backend} onRun={onRunBackend} />
       <div ref={stage} className="flex-1 min-h-0 bg-[#111116] grid-lines relative overflow-hidden">
         {inspect && (
           <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 rounded-full bg-primary px-3 py-1 text-[11px] text-white shadow-lg pointer-events-none" data-testid="preview-inspect-hint">

@@ -17,7 +17,7 @@ import EnvDialog from "@/components/workspace/EnvDialog";
 import ProjectSettingsDialog from "@/components/workspace/ProjectSettingsDialog";
 import { Button } from "@/components/ui/button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
-import { useApi, errMsg, streamChat } from "@/lib/api";
+import { useApi, errMsg, streamChat, API } from "@/lib/api";
 import { buildPreview, emptyHtml, extractRoutes } from "@/lib/preview";
 
 function useAssetUrls(api, pid, files) {
@@ -37,7 +37,7 @@ function useAssetUrls(api, pid, files) {
   return urls;
 }
 
-function usePreview(files, assetUrls, env) {
+function usePreview(files, assetUrls, env, proxy) {
   const [html, setHtml] = useState(emptyHtml("Carregando prévia…"));
   const [building, setBuilding] = useState(false);
   const prev = useRef([]);
@@ -45,7 +45,7 @@ function usePreview(files, assetUrls, env) {
     setBuilding(true);
     const t = setTimeout(() => {
       try {
-        const { html, urls } = buildPreview(files, { ...assetUrls }, env);
+        const { html, urls } = buildPreview(files, { ...assetUrls }, env, "/", proxy);
         prev.current.forEach((u) => URL.revokeObjectURL(u));
         prev.current = urls;
         setHtml(html);
@@ -53,8 +53,31 @@ function usePreview(files, assetUrls, env) {
       setBuilding(false);
     }, 700);
     return () => clearTimeout(t);
-  }, [files, assetUrls, env]);
+  }, [files, assetUrls, env, proxy?.base, proxy?.token]);
   return { html, building };
+}
+
+function useBackendRunner(api, id, files) {
+  const [backend, setBackend] = useState({ status: "stopped" });
+  const hasBackend = useMemo(() => files.some((f) => f.path === "backend/server.py"), [files]);
+  const backendSig = useMemo(
+    () => files.filter((f) => f.path.startsWith("backend/")).map((f) => `${f.path}:${(f.content || "").length}`).join("|"),
+    [files]);
+  const run = useCallback(async () => {
+    try { const r = await api.post(`/projects/${id}/preview/run`); setBackend(r.data); } catch {}
+  }, [api, id]);
+  useEffect(() => { if (hasBackend) run(); else setBackend({ status: "no_backend" }); }, [backendSig, hasBackend, run]);
+  useEffect(() => {
+    if (!["starting", "installing"].includes(backend.status)) return;
+    const t = setInterval(async () => {
+      try { const r = await api.get(`/projects/${id}/preview/status`); setBackend(r.data); } catch {}
+    }, 2500);
+    return () => clearInterval(t);
+  }, [backend.status, api, id]);
+  const proxy = useMemo(
+    () => (backend.token ? { base: `${API}/projects/${id}/preview/proxy/`, token: backend.token } : null),
+    [backend.token, id]);
+  return { backend, run, proxy, hasBackend };
 }
 
 export default function Workspace() {
@@ -287,7 +310,8 @@ export default function Workspace() {
   };
 
   const assetUrls = useAssetUrls(api, id, files);
-  const { html, building } = usePreview(files, assetUrls, env);
+  const { backend, run: runBackend, proxy } = useBackendRunner(api, id, files);
+  const { html, building } = usePreview(files, assetUrls, env, proxy);
   const routes = useMemo(() => extractRoutes(files), [files]);
   const selectedFile = useMemo(() => files.find((f) => f.path === selected), [files, selected]);
 
@@ -329,7 +353,7 @@ export default function Workspace() {
         <ResizableHandle />
         <ResizablePanel defaultSize={35} minSize={20}>
           <ResizablePanelGroup direction="vertical">
-            <ResizablePanel defaultSize={72} minSize={30}><PreviewPanel html={html} building={building} busy={!!live} onFixErrors={fixErrors} onPick={onPick} project={project} onTogglePublic={(v) => patchProject({ public_preview: v })} routes={routes} /></ResizablePanel>
+            <ResizablePanel defaultSize={72} minSize={30}><PreviewPanel html={html} building={building} busy={!!live} onFixErrors={fixErrors} onPick={onPick} project={project} onTogglePublic={(v) => patchProject({ public_preview: v })} routes={routes} backend={backend} onRunBackend={runBackend} /></ResizablePanel>
             <ResizableHandle />
             <ResizablePanel defaultSize={28} minSize={8}><TerminalPanel logs={logs} onClear={() => setLogs([])} /></ResizablePanel>
           </ResizablePanelGroup>

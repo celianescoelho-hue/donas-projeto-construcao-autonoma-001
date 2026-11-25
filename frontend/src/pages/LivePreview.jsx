@@ -23,6 +23,23 @@ export default function LivePreview() {
   const stamp = useRef(null);
   const cache = useRef({});
   const frameRef = useRef(null);
+  const ptokRef = useRef(null);
+  const [, bump] = useState(0);
+
+  useEffect(() => {
+    let alive = true; let tries = 0;
+    const poll = async () => {
+      if (!alive) return;
+      try {
+        const r = await fetch(`${API}/${id}/preview/run`, { method: "POST" });
+        const d = r.ok ? await r.json() : {};
+        if (d.token && d.token !== ptokRef.current) { ptokRef.current = d.token; stamp.current = null; bump((x) => x + 1); }
+        if (["starting", "installing"].includes(d.status) && tries++ < 80) setTimeout(poll, 3000);
+      } catch { if (tries++ < 10) setTimeout(poll, 3000); }
+    };
+    poll();
+    return () => { alive = false; };
+  }, [id]);
 
   useEffect(() => {
     const onMsg = (e) => {
@@ -55,7 +72,8 @@ export default function LivePreview() {
         stamp.current = d.updated_at;
         document.title = `${d.name} · Donas`;
         const assets = await loadAssets(id, d.files, cache.current);
-        if (alive) { setHtml(buildPreview(d.files, assets, d.env, initialPath).html); setError(null); }
+        const proxy = ptokRef.current ? { base: `${API}/${id}/preview/proxy/`, token: ptokRef.current } : null;
+        if (alive) { setHtml(buildPreview(d.files, assets, d.env, initialPath, proxy).html); setError(null); }
       } catch (e) { if (alive) setError(e.message); }
     };
     load();

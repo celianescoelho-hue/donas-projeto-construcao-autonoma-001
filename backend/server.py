@@ -15,7 +15,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
 import httpx
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, Request
 from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel, Field
 from pymongo import ASCENDING, DESCENDING, IndexModel
@@ -36,6 +36,7 @@ from core import (db, client, now, new_id, encrypt, decrypt, current_member, req
                   record_version, file_snapshot, rate_limit, summarize_text, summarize_image, store_binary, get_object, init_storage,
                   effective_role, ROLES, RANK, IN_ENV, RETIRED_ROLES, IMAGE_TYPES, OPENROUTER_BASE, logger, DOC_TYPES, summarize_pdf, summarize_zip)
 from agent import Agent, resolve_key, clean_path
+import runner
 import github_sync as ghs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -204,6 +205,7 @@ async def delete_project(pid: str, member: dict = Depends(current_member)):
     for col in ("files", "messages", "versions"):
         await db[col].delete_many({"project_id": pid})
     await db.projects.delete_one({"id": pid, "user_id": member["user_id"]})
+    runner.stop(pid)
     return {"ok": True}
 
 
@@ -253,6 +255,54 @@ async def public_asset(pid: str, path: str = Query(...)):
         raise HTTPException(status_code=404, detail="Arquivo não encontrado")
     data, _ = await run_in_threadpool(get_object, f["storage_path"])
     return Response(content=data, media_type=f["content_type"], headers={"Cache-Control": "public, max-age=300"})
+
+
+# ---------------- Full-stack preview runner & reverse proxy ----------------
+PROXY_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
+
+
+@api.post("/projects/{pid}/preview/run")
+async def preview_run(pid: str, member: dict = Depends(active_member)):
+    p = await get_project(pid, member)
+    return await runner.ensure(pid, load_env(p))
+
+
+@api.get("/projects/{pid}/preview/status")
+async def preview_status(pid: str, member: dict = Depends(current_member)):
+    await get_project(pid, member)
+    return runner.status(pid)
+
+
+@api.post("/projects/{pid}/preview/stop")
+async def preview_stop(pid: str, member: dict = Depends(current_member)):
+    await get_project(pid, member)
+    runner.stop(pid)
+    return {"ok": True}
+
+
+@api.api_route("/projects/{pid}/preview/proxy/{path:path}", methods=PROXY_METHODS)
+async def preview_proxy(pid: str, path: str, request: Request):
+    st = runner.RUNNERS.get(pid)
+    tok = request.headers.get("x-preview-token") or request.query_params.get("ptok")
+    if not st or not tok or tok != st.get("token"):
+        raise HTTPException(status_code=401, detail="Prévia não autorizada.")
+    return await runner.proxy(pid, request.method, path, request)
+
+
+@api.post("/public/projects/{pid}/preview/run")
+async def public_preview_run(pid: str):
+    p = await public_project(pid)
+    return await runner.ensure(pid, load_env(p))
+
+
+@api.api_route("/public/projects/{pid}/preview/proxy/{path:path}", methods=PROXY_METHODS)
+async def public_preview_proxy(pid: str, path: str, request: Request):
+    st = runner.RUNNERS.get(pid)
+    tok = request.headers.get("x-preview-token") or request.query_params.get("ptok")
+    if not st or not tok or tok != st.get("token"):
+        raise HTTPException(status_code=401, detail="Prévia não autorizada.")
+    return await runner.proxy(pid, request.method, path, request)
+
 
 
 ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,79}$")
@@ -841,6 +891,8 @@ async def startup():
         await run_in_threadpool(init_storage)
     except Exception as e:
         logger.error("Storage init failed: %s", e)
+    import threading
+    threading.Thread(target=runner.reaper_loop, daemon=True).start()
 
 
 @app.on_event("shutdown")
