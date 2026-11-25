@@ -48,10 +48,15 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {"directory": {"type": "string", "description": "Pasta, ex: frontend/src. Vazio = tudo."}}}}},
     {"type": "function", "function": {"name": "read_file", "description": "Lê um arquivo inteiro ou um intervalo de linhas (numeradas a partir de 1).",
         "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "start_line": {"type": "integer"}, "end_line": {"type": "integer"}}, "required": ["path"]}}},
-    {"type": "function", "function": {"name": "search_in_files", "description": "Busca global de texto ou regex em todos os arquivos de texto do projeto. Retorna arquivo:linha:coluna e o trecho, sem ler arquivos inteiros.",
-        "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "regex": {"type": "boolean", "description": "Tratar query como regex Python (padrão false)"},
-                       "case_sensitive": {"type": "boolean"}, "path_glob": {"type": "string", "description": "Filtro opcional, ex: frontend/src/**/*.jsx"},
-                       "context": {"type": "integer", "description": "Linhas de contexto antes/depois (0-3)"}, "max_results": {"type": "integer"}}, "required": ["query"]}}},
+    {"type": "function", "function": {"name": "search_in_files", "description": "Busca global em todos os arquivos de texto do projeto. O argumento 'query' é OBRIGATÓRIO e deve conter o texto (ou regex) a procurar, nunca vazio. Exemplo: {\"query\": \"useState\"} ou {\"query\": \"class=\\\"hero\", \"path_glob\": \"frontend/src/*\"}. Retorna arquivo:linha:coluna e o trecho. Para listar arquivos use list_files.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "minLength": 1, "description": "Texto ou regex a procurar (obrigatório, não vazio). Ex.: 'Cliques', 'function App', 'https?://'"},
+            "regex": {"type": "boolean", "description": "true = query é regex Python; padrão false (texto literal)"},
+            "case_sensitive": {"type": "boolean", "description": "Padrão false"},
+            "path_glob": {"type": "string", "description": "Filtro opcional de caminho, ex.: frontend/src/*.jsx ou frontend/src/ (pasta)"},
+            "context": {"type": "integer", "minimum": 0, "maximum": 3, "description": "Linhas de contexto antes/depois"},
+            "max_results": {"type": "integer", "minimum": 1, "maximum": 200}},
+            "required": ["query"], "additionalProperties": False}}},
     {"type": "function", "function": {"name": "replace_in_file", "description": "Substitui um trecho exato e único de um arquivo existente por um novo trecho.",
         "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["path", "old_text", "new_text"]}}},
     {"type": "function", "function": {"name": "create_file", "description": "Cria um arquivo novo (ou reescreve um arquivo existente de até 60 linhas).",
@@ -206,15 +211,21 @@ class Agent:
         await self.emit({"type": "change", **card})
 
     async def _search(self, args):
-        query = args.get("query") or ""
+        query = next((v for k in ("query", "pattern", "search", "text", "term", "keyword", "q")
+                      if isinstance(v := args.get(k), str) and v.strip()), "")
+        if not query and isinstance(args.get("regex"), str) and args["regex"].strip():
+            query, args = args["regex"], {**args, "regex": True}
         if not query:
-            return "ERRO: query vazia."
+            return ('ERRO: search_in_files precisa do argumento "query" com o texto a procurar (não pode ser vazio). '
+                    'Exemplo: {"query": "useState"}. Para ver os arquivos use list_files.')
         flags = 0 if args.get("case_sensitive") else re.I
         try:
             rx = re.compile(query if args.get("regex") else re.escape(query), flags)
         except re.error as e:
             return f"ERRO: regex inválida ({e})."
-        glob = args.get("path_glob")
+        glob = args.get("path_glob") or args.get("glob") or args.get("path") or args.get("directory")
+        if glob and not any(c in glob for c in "*?["):
+            glob = glob.rstrip("/") + ("/*" if "." not in glob.split("/")[-1] else "")
         ctx = max(0, min(3, int(args.get("context") or 0)))
         limit = max(1, min(200, int(args.get("max_results") or 80)))
         out, hits, files_hit = [], 0, set()
@@ -586,6 +597,9 @@ class Agent:
                         break
                 else:
                     self.text += "\n(Limite de passos atingido — envie 'continue' para seguir.)"
+        except asyncio.CancelledError:
+            error = "Execução interrompida (botão Parar, conexão caiu ou tempo limite). O que já foi feito ficou salvo."
+            raise
         except Exception as e:
             logger.exception("agent error")
             error = friendly_error(e)
@@ -593,14 +607,16 @@ class Agent:
         finally:
             if not error and not self.text.strip() and not self.change_cards:
                 error = "O modelo não retornou nenhuma resposta (pode ter batido no limite de tokens). Tente de novo, divida o pedido ou troque de modelo."
-            version = await record_version(self.pid, prompt, self.changes, "ai")
-            msg = {"id": new_id(), "project_id": self.pid, "role": "assistant", "content": self.text.strip(),
-                   "changes": self.change_cards, "error": error, "warnings": self.warnings, "model": model, "cost": self.cost,
-                   "tokens": self.tokens, "version": version, "created_at": now()}
-            await db.messages.insert_one(msg)
-            msg.pop("_id", None)
-            await self.emit({"type": "done", "message": msg})
-            await self.q.put(None)
+            await asyncio.shield(self._finish(prompt, model, error))
+
+    async def _finish(self, prompt, model, error):
+        version = await record_version(self.pid, prompt, self.changes, "ai")
+        msg = {"id": new_id(), "project_id": self.pid, "role": "assistant", "content": self.text.strip(),
+               "changes": self.change_cards, "error": error, "warnings": self.warnings, "model": model, "cost": self.cost,
+               "tokens": self.tokens, "version": version, "created_at": now()}
+        await db.messages.insert_one(msg)
+        msg.pop("_id", None)
+        await self.emit({"type": "done", "message": msg})
 
 
 def friendly_error(e: Exception) -> str:

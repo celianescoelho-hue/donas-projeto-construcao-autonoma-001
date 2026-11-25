@@ -123,10 +123,28 @@ export default function Workspace() {
     try { await api.patch(`/projects/${id}`, { model: m }); } catch (e) { toast.error(errMsg(e)); }
   };
 
+  const abortRef = useRef(null);
+
+  const reloadMessages = async () => {
+    const r = await api.get(`/projects/${id}/messages`).catch(() => null);
+    if (r) setMessages(r.data);
+    return r?.data;
+  };
+
+  const stop = async () => {
+    abortRef.current?.abort();
+    try { await api.post(`/projects/${id}/cancel`); } catch (e) { toast.error(errMsg(e)); }
+    log("warn", "execução interrompida pelo usuário (Parar)");
+    setLive(null);
+    setTimeout(() => { reloadMessages(); loadFiles(); }, 900);
+  };
+
   const send = async (prompt, attachments = []) => {
     setMessages((ms) => [...ms, { id: `tmp-${Date.now()}`, role: "user", content: prompt, attachments }]);
     setLive({ text: "", tools: [], changes: [], warnings: [], model });
     let gotDone = false;
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
     log("system", `$ donas run --model ${model}`);
     try {
       const token = await api.token();
@@ -149,21 +167,25 @@ export default function Workspace() {
           setLive(null);
           loadFiles();
         }
-      });
+      }, ctrl.signal);
       if (!gotDone) {
+        await api.post(`/projects/${id}/cancel`).catch(() => {});
         const msg = "A conexão com a IA caiu antes do fim da resposta. O que já foi feito ficou salvo; atualize ou envie 'continue'.";
         log("error", msg);
+        await new Promise((ok) => setTimeout(ok, 800));
         const r = await api.get(`/projects/${id}/messages`).catch(() => null);
         const last = r?.data?.[r.data.length - 1];
-        if (last?.role === "assistant") setMessages(r.data);
+        if (last?.role === "assistant") setMessages(last.error ? r.data : [...r.data, { id: `err-${Date.now()}`, role: "assistant", content: "", error: msg }]);
         else setMessages((ms) => [...ms, { id: `err-${Date.now()}`, role: "assistant", content: "", error: msg }]);
         loadFiles();
       }
     } catch (e) {
+      if (e.name === "AbortError") return;
       toast.error(e.message);
       log("error", e.message);
       setMessages((ms) => [...ms, { id: `err-${Date.now()}`, role: "assistant", content: "", error: e.message }]);
     } finally {
+      if (abortRef.current === ctrl) abortRef.current = null;
       setLive(null);
       setTimeout(() => setFresh(new Set()), 2000);
     }
@@ -278,7 +300,7 @@ export default function Workspace() {
         <ResizablePanel defaultSize={27} minSize={20}>
           <ChatPanel messages={messages} live={live} busy={!!live} onSend={send} models={models} model={model} onModel={changeModel}
             onOpenDiff={setDiff} onAttach={(fl) => upload(fl, "uploads", true)} showImportHint={!!project && files.length === 0} onImportGithub={() => setImportOpen(true)}
-            inject={inject} onUndo={undoVersion} />
+            inject={inject} onUndo={undoVersion} onStop={stop} />
         </ResizablePanel>
         <ResizableHandle />
         <ResizablePanel defaultSize={38} minSize={22}>

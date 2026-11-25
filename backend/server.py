@@ -3,6 +3,7 @@ import os
 import re
 import json
 import asyncio
+import time
 import logging
 import zipfile
 from pathlib import Path
@@ -412,26 +413,62 @@ class ChatIn(BaseModel):
 
 
 RUNNING: dict = {}
+RUN_TTL = 15 * 60
+RUN_TIMEOUT = 12 * 60
+
+
+def is_busy(pid: str) -> bool:
+    e = RUNNING.get(pid)
+    if not e:
+        return False
+    task = e.get("task")
+    if (task is not None and task.done()) or time.monotonic() - e["started"] > RUN_TTL:
+        RUNNING.pop(pid, None)
+        if task is not None and not task.done():
+            task.cancel()
+        return False
+    return True
+
+
+def acquire(pid: str, user_id: str) -> str:
+    token = new_id()
+    RUNNING[pid] = {"user": user_id, "token": token, "task": None, "started": time.monotonic()}
+    return token
+
+
+def release(pid: str, token: str):
+    if RUNNING.get(pid, {}).get("token") == token:
+        RUNNING.pop(pid, None)
 
 
 @api.post("/projects/{pid}/chat")
 async def chat(pid: str, body: ChatIn, member: dict = Depends(active_member)):
     project = await get_project(pid, member)
-    if RUNNING.get(pid):
-        raise HTTPException(status_code=409, detail="A IA já está trabalhando neste projeto.")
-    if sum(1 for u in RUNNING.values() if u == member["user_id"]) >= 2:
+    if is_busy(pid):
+        raise HTTPException(status_code=409, detail="A IA já está trabalhando neste projeto. Use Parar para interromper.")
+    if sum(1 for p in list(RUNNING) if is_busy(p) and RUNNING.get(p, {}).get("user") == member["user_id"]) >= 2:
         raise HTTPException(status_code=429, detail="Você já tem 2 tarefas da IA em andamento. Aguarde uma terminar.")
     rate_limit(f"chat:{member['user_id']}", 8, 60)
     rate_limit(f"chat_h:{member['user_id']}", 80, 3600)
-    RUNNING[pid] = member["user_id"]
+    token = acquire(pid, member["user_id"])
     try:
-        return await _start_chat(pid, project, body, member)
+        return await _start_chat(pid, project, body, member, token)
     except BaseException:
-        RUNNING.pop(pid, None)
+        release(pid, token)
         raise
 
 
-async def _start_chat(pid: str, project: dict, body: ChatIn, member: dict):
+@api.post("/projects/{pid}/cancel")
+async def cancel_chat(pid: str, member: dict = Depends(current_member)):
+    await get_project(pid, member)
+    e = RUNNING.pop(pid, None)
+    task = (e or {}).get("task")
+    if task is not None and not task.done():
+        task.cancel()
+    return {"ok": True, "was_running": bool(e)}
+
+
+async def _start_chat(pid: str, project: dict, body: ChatIn, member: dict, token: str):
     s = await get_settings()
     allowed = [m["id"] for m in s["enabled_models"]]
     model = body.model or project.get("model") or s["default_model"]
@@ -456,23 +493,41 @@ async def _start_chat(pid: str, project: dict, body: ChatIn, member: dict):
 
     async def runner():
         try:
-            await agent.run(body.prompt, model, api_key, source)
+            await asyncio.wait_for(agent.run(body.prompt, model, api_key, source), timeout=RUN_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning("agent run timeout for %s", pid)
+        except asyncio.CancelledError:
+            logger.info("agent run cancelled for %s", pid)
         finally:
-            RUNNING.pop(pid, None)
+            release(pid, token)
+            await queue.put(None)
 
-    asyncio.create_task(runner())
+    task = asyncio.create_task(runner())
+    if pid in RUNNING:
+        RUNNING[pid]["task"] = task
 
     async def events():
-        yield f"data: {json.dumps({'type': 'start', 'model': model, 'key_source': source})}\n\n"
-        while True:
-            try:
-                ev = await asyncio.wait_for(queue.get(), timeout=15)
-            except asyncio.TimeoutError:
-                yield ": ping\n\n"
-                continue
-            if ev is None:
-                break
-            yield f"data: {json.dumps(ev, default=str)}\n\n"
+        finished = False
+        try:
+            yield f"data: {json.dumps({'type': 'start', 'model': model, 'key_source': source})}\n\n"
+            while True:
+                try:
+                    ev = await asyncio.wait_for(queue.get(), timeout=15)
+                except asyncio.TimeoutError:
+                    if task.done():
+                        finished = True
+                        break
+                    yield ": ping\n\n"
+                    continue
+                if ev is None:
+                    finished = True
+                    break
+                yield f"data: {json.dumps(ev, default=str)}\n\n"
+        finally:
+            if not finished and not task.done():
+                logger.info("client disconnected, cancelling agent for %s", pid)
+                task.cancel()
+            release(pid, token)
 
     return StreamingResponse(events(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -498,7 +553,7 @@ async def apply_snapshot(pid: str, path: str, snap: dict | None):
 @api.post("/projects/{pid}/versions/{vid}/restore")
 async def restore(pid: str, vid: str, mode: str = Query("after", pattern="^(after|before)$"), member: dict = Depends(current_member)):
     await get_project(pid, member)
-    if RUNNING.get(pid):
+    if is_busy(pid):
         raise HTTPException(status_code=409, detail="A IA está trabalhando neste projeto. Aguarde para restaurar.")
     target = await db.versions.find_one({"id": vid, "project_id": pid}, {"_id": 0})
     if not target:
@@ -565,9 +620,9 @@ async def import_project(body: ImportIn, member: dict = Depends(active_member)):
 async def import_into_project(pid: str, body: ImportIn, member: dict = Depends(active_member)):
     rate_limit(f"import:{member['user_id']}", 5, 600)
     await get_project(pid, member)
-    if RUNNING.get(pid):
+    if is_busy(pid):
         raise HTTPException(status_code=409, detail="Este projeto está ocupado (IA ou importação em andamento).")
-    RUNNING[pid] = member["user_id"]
+    token = acquire(pid, member["user_id"])
     try:
         if await db.files.count_documents({"project_id": pid}) > 0:
             raise HTTPException(status_code=409, detail="Este projeto já tem arquivos. Crie um projeto novo para importar um repositório.")
@@ -578,7 +633,7 @@ async def import_into_project(pid: str, body: ImportIn, member: dict = Depends(a
             await db.files.delete_many({"project_id": pid})
             raise
     finally:
-        RUNNING.pop(pid, None)
+        release(pid, token)
 
 
 @api.get("/projects/{pid}/github/suggest-message")

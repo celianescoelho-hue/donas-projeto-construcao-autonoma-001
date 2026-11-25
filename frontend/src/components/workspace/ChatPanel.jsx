@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Send, Paperclip, Loader2, FilePlus2, FilePen, FileX2, Wrench, AlertTriangle, Bot, Undo2 } from "lucide-react";
+import { Send, Paperclip, Loader2, FilePlus2, FilePen, FileX2, Wrench, AlertTriangle, Bot, Undo2, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -98,7 +98,7 @@ function Live({ live, onOpenDiff }) {
   );
 }
 
-export default function ChatPanel({ messages, live, busy, onSend, models, model, onModel, onAttach, onOpenDiff, showImportHint, onImportGithub, inject, onUndo }) {
+export default function ChatPanel({ messages, live, busy, onSend, models, model, onModel, onAttach, onOpenDiff, showImportHint, onImportGithub, inject, onUndo, onStop }) {
   const [prompt, setPrompt] = useState("");
   const [atts, setAtts] = useState([]);
   const [drag, setDrag] = useState(false);
@@ -191,9 +191,15 @@ export default function ChatPanel({ messages, live, busy, onSend, models, model,
           <Button size="sm" variant="ghost" className="h-8 px-2" onClick={() => fileRef.current?.click()} title="Anexar arquivos (imagens, .html, .json, .txt, .pdf, .zip) — salvos em /uploads" data-testid="upload-files-btn">
             <Paperclip className="h-4 w-4" />
           </Button>
-          <Button size="sm" className="ml-auto h-8 rounded-full" onClick={send} disabled={busy || uploading || (!prompt.trim() && !atts.length)} data-testid="chat-submit-button">
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          </Button>
+          {busy ? (
+            <Button size="sm" variant="destructive" className="ml-auto h-8 rounded-full gap-1.5" onClick={onStop} data-testid="chat-stop-button" title="Parar a IA e liberar o projeto">
+              <Square className="h-3.5 w-3.5 fill-current" />Parar
+            </Button>
+          ) : (
+            <Button size="sm" className="ml-auto h-8 rounded-full" onClick={send} disabled={uploading || (!prompt.trim() && !atts.length)} data-testid="chat-submit-button">
+              {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            </Button>
+          )}
         </div>
       </div>
     </div>
