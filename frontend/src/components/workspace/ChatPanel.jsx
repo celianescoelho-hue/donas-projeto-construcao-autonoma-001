@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Send, Paperclip, Loader2, FilePlus2, FilePen, FileX2, Wrench, AlertTriangle, Bot, Undo2, Square } from "lucide-react";
+import { Send, Paperclip, Loader2, FilePlus2, FilePen, FileX2, Wrench, AlertTriangle, Bot, Undo2, Square, MessageSquarePlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -98,7 +98,7 @@ function Live({ live, onOpenDiff }) {
   );
 }
 
-export default function ChatPanel({ messages, live, busy, onSend, models, model, onModel, onAttach, onOpenDiff, showImportHint, onImportGithub, inject, onUndo, onStop }) {
+export default function ChatPanel({ messages, live, busy, onSend, models, model, onModel, onAttach, onOpenDiff, showImportHint, onImportGithub, inject, onUndo, onStop, onClear }) {
   const [prompt, setPrompt] = useState("");
   const [atts, setAtts] = useState([]);
   const [drag, setDrag] = useState(false);
@@ -154,6 +154,14 @@ export default function ChatPanel({ messages, live, busy, onSend, models, model,
 
   return (
     <div className="h-full flex flex-col bg-card/40" data-testid="chat-panel">
+      <div className="h-9 shrink-0 flex items-center gap-2 px-3 border-b">
+        <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">Chat</span>
+        <span className="font-mono text-[10px] text-muted-foreground/60" data-testid="chat-message-count">{messages.length}</span>
+        <Button size="sm" variant="ghost" className="ml-auto h-6 px-2 text-[11px] gap-1.5" disabled={busy || !messages.length} onClick={onClear}
+          title="Zera o histórico da conversa; os arquivos do projeto continuam" data-testid="chat-clear-btn">
+          <MessageSquarePlus className="h-3.5 w-3.5" />Nova conversa
+        </Button>
+      </div>
       <div className="flex-1 overflow-y-auto scroll-thin p-4 space-y-5">
         {messages.length === 0 && !live && (
           <div className="pt-10 text-center text-sm text-muted-foreground px-6" data-testid="chat-empty">

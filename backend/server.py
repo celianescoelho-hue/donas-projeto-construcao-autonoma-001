@@ -403,7 +403,7 @@ async def download_zip(pid: str, member: dict = Depends(current_member)):
 @api.get("/projects/{pid}/messages")
 async def messages(pid: str, member: dict = Depends(current_member)):
     await get_project(pid, member)
-    return await db.messages.find({"project_id": pid}, {"_id": 0}).sort("created_at", 1).to_list(500)
+    return await db.messages.find({"project_id": pid, "archived": {"$ne": True}}, {"_id": 0}).sort("created_at", 1).to_list(500)
 
 
 class ChatIn(BaseModel):
@@ -456,6 +456,15 @@ async def chat(pid: str, body: ChatIn, member: dict = Depends(active_member)):
     except BaseException:
         release(pid, token)
         raise
+
+
+@api.delete("/projects/{pid}/messages")
+async def clear_messages(pid: str, member: dict = Depends(current_member)):
+    await get_project(pid, member)
+    if is_busy(pid):
+        raise HTTPException(status_code=409, detail="A IA está trabalhando. Pare a execução antes de limpar o chat.")
+    r = await db.messages.update_many({"project_id": pid, "archived": {"$ne": True}}, {"$set": {"archived": True, "archived_at": now()}})
+    return {"ok": True, "deleted": r.modified_count}
 
 
 @api.post("/projects/{pid}/cancel")

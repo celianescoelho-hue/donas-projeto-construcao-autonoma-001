@@ -152,6 +152,24 @@ def attachments_note(atts: list) -> str:
             "Use read_file por trechos, search_in_files, move_or_copy_file, clean_external_links ou extract_zip]\n" + "\n".join(lines))
 
 
+HISTORY_LIMIT = 6
+MAX_NUDGES = 2
+FAKE_LOG = re.compile(r"\n?\[Altera[çc][õo]es:[^\]]*\]", re.I)
+CLAIM = re.compile(r"\[Altera[çc][õo]es:|arquivos?\s+(?:foi\s+|foram\s+)?(?:criados?|atualizados?|editados?|modificados?|alterados?|salvos?)|"
+                   r"(?:criei|atualizei|editei|modifiquei|alterei|adicionei|substitu[ií]) (?:o|a|os|as)? ?(?:arquivo|componente|p[áa]gina|c[óo]digo)|"
+                   r"(?:0|\d+) arquivo\(s\)|(?:create_file|replace_in_file|delete_file)\s*[:(]", re.I)
+TOOL_RULE = ("\n\nREGRA CRÍTICA: alterações só existem se você CHAMAR as ferramentas (tool_calls). Nunca escreva 'Arquivo criado', "
+             "'[Alterações: ...]' ou um resumo de mudanças sem ter chamado create_file/replace_in_file/delete_file/move_or_copy_file antes. "
+             "Se o pedido exige mudar arquivos, comece chamando as ferramentas.")
+NUDGE = ("SISTEMA: sua última resposta descreveu alterações, mas você NÃO chamou nenhuma ferramenta — nenhum arquivo foi modificado. "
+         "Faça agora as alterações de verdade chamando as ferramentas (search_in_files/read_file para localizar, depois replace_in_file ou create_file). "
+         "Não escreva resumo antes de concluir as chamadas.")
+
+
+def fake_claim(text: str) -> bool:
+    return bool(text and CLAIM.search(text))
+
+
 READ_BUDGET = 18000
 LINE_CAP = 2000
 
@@ -197,6 +215,8 @@ class Agent:
         self.unknown_streak = 0
         self.warnings: list = []
         self.stream_buf = ""
+        self.nudges = 0
+        self.force_tools = False
 
     async def emit(self, event: dict):
         await self.q.put(event)
@@ -467,7 +487,7 @@ class Agent:
             return f"ERRO: argumentos inválidos ({e})."
 
     async def build_messages(self, prompt: str) -> list:
-        history = list(reversed(await db.messages.find({"project_id": self.pid}, {"_id": 0}).sort("created_at", -1).to_list(16)))
+        history = list(reversed(await db.messages.find({"project_id": self.pid, "archived": {"$ne": True}}, {"_id": 0}).sort("created_at", -1).to_list(HISTORY_LIMIT)))
         p = await db.projects.find_one({"id": self.pid}, {"_id": 0, "env_enc": 1}) or {}
         env_names = []
         if p.get("env_enc"):
@@ -477,12 +497,14 @@ class Agent:
                 env_names = []
         env_note = ("\n\nVARIÁVEIS DE AMBIENTE DO PROJETO (valores definidos pelo usuário no painel .env, injetados na prévia como process.env.NOME; "
                     "use-as pelo nome, nunca escreva os valores no código): " + ", ".join(env_names)) if env_names else ""
-        msgs = [{"role": "system", "content": SYSTEM_PROMPT + env_note + "\n\nMAPA ATUAL DO PROJETO:\n" + await project_map(self.pid)}]
+        done = [f"{c['path']} ({c.get('op', 'edit')})" for m in history if m["role"] == "assistant" for c in (m.get("changes") or [])[:20]]
+        done_note = ("\n\nALTERAÇÕES JÁ FEITAS EM TURNOS ANTERIORES (registro da plataforma, não imite este formato): " + ", ".join(done[-40:])) if done else ""
+        msgs = [{"role": "system", "content": SYSTEM_PROMPT + TOOL_RULE + env_note + done_note + "\n\nMAPA ATUAL DO PROJETO:\n" + await project_map(self.pid)}]
         current = history and history[-1]["role"] == "user" and history[-1].get("content") == prompt
         for i, m in enumerate(history):
             content = m.get("content") or ""
-            if m["role"] == "assistant" and m.get("changes"):
-                content += "\n[Alterações: " + ", ".join(f"{c['path']} (+{c['added']}/-{c['removed']})" for c in m["changes"][:40]) + "]"
+            if m["role"] == "assistant":
+                content = FAKE_LOG.sub("", content).strip()[:2000]
             is_last = current and i == len(history) - 1
             if not is_last:
                 content = content[:6000]
@@ -495,7 +517,7 @@ class Agent:
         return msgs
 
     async def call_model(self, client, headers, model, messages):
-        payload = {"model": model, "messages": messages, "tools": TOOLS, "tool_choice": "auto",
+        payload = {"model": model, "messages": messages, "tools": TOOLS, "tool_choice": "required" if self.force_tools else "auto",
                    "stream": True, "max_tokens": 8000, "temperature": 0.2}
         text, calls, usage, gen_id, finish = "", {}, None, None, None
         self.stream_buf = ""
@@ -567,7 +589,18 @@ class Agent:
                     if finish == "length":
                         await self.warn("A resposta do modelo foi cortada no limite de tokens. "
                                         + ("Pedi para ele refazer em partes menores." if calls else "Envie 'continue' para ele seguir."))
+                    if not calls and not self.change_cards and fake_claim(text) and self.nudges < MAX_NUDGES:
+                        self.nudges += 1
+                        self.text = self.text[: len(self.text) - len(text) - 1] if text else self.text
+                        await self.warn("A IA descreveu alterações sem usar ferramentas (nada foi salvo). Pedi para ela fazer de verdade.")
+                        messages.append({"role": "assistant", "content": text})
+                        messages.append({"role": "user", "content": NUDGE})
+                        self.force_tools = True
+                        continue
+                    self.force_tools = False
                     if not calls:
+                        if not self.change_cards and fake_claim(text):
+                            await self.warn("A IA afirmou ter alterado arquivos, mas não chamou nenhuma ferramenta: nenhum arquivo foi modificado. Tente 'Nova conversa' ou outro modelo.")
                         break
                     messages.append({"role": "assistant", "content": text or None, "tool_calls": [
                         {"id": c["id"] or f"call_{i}", "type": "function", "function": {"name": c["name"], "arguments": c["arguments"] or "{}"}}

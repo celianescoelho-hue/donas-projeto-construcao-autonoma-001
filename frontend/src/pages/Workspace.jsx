@@ -139,6 +139,16 @@ export default function Workspace() {
     setTimeout(() => { reloadMessages(); loadFiles(); }, 900);
   };
 
+  const clearChat = async () => {
+    if (!window.confirm("Começar uma nova conversa? O histórico do chat será apagado, mas os arquivos e as versões do projeto continuam.")) return;
+    try {
+      const r = await api.delete(`/projects/${id}/messages`);
+      setMessages([]);
+      toast.success("Nova conversa iniciada — arquivos mantidos");
+      log("system", `chat limpo · ${r.data.deleted} mensagem(ns) removidas`);
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
   const send = async (prompt, attachments = []) => {
     setMessages((ms) => [...ms, { id: `tmp-${Date.now()}`, role: "user", content: prompt, attachments }]);
     setLive({ text: "", tools: [], changes: [], warnings: [], model });
@@ -154,7 +164,7 @@ export default function Workspace() {
         else if (ev.type === "tool") { setLive((l) => l && { ...l, tools: [...l.tools, ev] }); log("agent", `${ev.name} ${ev.path || ""}`); }
         else if (ev.type === "tool_error") { setLive((l) => l && { ...l, tools: [...l.tools, { name: ev.name, error: ev.message }] }); log("warn", `${ev.name}: ${ev.message}`); }
         else if (ev.type === "error") { setLive((l) => l && { ...l, error: ev.message }); log("error", ev.message); }
-        else if (ev.type === "warning") { setLive((l) => l && { ...l, warnings: [...l.warnings, ev.message] }); log("warn", ev.message); }
+        else if (ev.type === "warning") { if (/sem usar ferramentas/.test(ev.message)) setLive((l) => l && { ...l, text: "" }); setLive((l) => l && { ...l, warnings: [...l.warnings, ev.message] }); log("warn", ev.message); }
         else if (ev.type === "change") {
           setLive((l) => l && { ...l, changes: [...l.changes, ev] });
           log("change", `${ev.op} ${ev.path}  +${ev.added} −${ev.removed}`);
@@ -300,7 +310,7 @@ export default function Workspace() {
         <ResizablePanel defaultSize={27} minSize={20}>
           <ChatPanel messages={messages} live={live} busy={!!live} onSend={send} models={models} model={model} onModel={changeModel}
             onOpenDiff={setDiff} onAttach={(fl) => upload(fl, "uploads", true)} showImportHint={!!project && files.length === 0} onImportGithub={() => setImportOpen(true)}
-            inject={inject} onUndo={undoVersion} onStop={stop} />
+            inject={inject} onUndo={undoVersion} onStop={stop} onClear={clearChat} />
         </ResizablePanel>
         <ResizableHandle />
         <ResizablePanel defaultSize={38} minSize={22}>
