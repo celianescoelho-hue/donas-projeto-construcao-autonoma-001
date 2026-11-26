@@ -1,0 +1,35 @@
+{
+  "summary": "Retest of iteration_14 findings. All requested items PASS. Backend test_iter15_pause_uid.py 8/8: unique persisted preview_uid (20001/20002 stored on project docs, db.counters n=2, restart=1 reuses same uid); preview uid gets PermissionError on /app/memory (0700), test_credentials.md, /etc/supervisor/conf.d (0700) + both .conf files, /app/backend/.env; stop=pause keeps .venv + backend files, a doc written before stop is still there after next run (count equal), re-run after pause took ~1.8s; 4 concurrent public POST /run after stop -> ['starting','installing','starting','starting'] (no 'stopped'); sandbox regression (platform mongo blocked, own DB only, other dir/DB unreadable); DELETE removes dir, preview DB and p_{pid} user; smoke /api/me, /api/models, project CRUD. LIVE PREVIEW (fresh browser context, /p/{id}/live): paused backend -> run responses 'starting' + 'installing', then status poll 'running' and iframe auto-shows 'pong do backend UI' after ~4s; never-run backend (cold venv) -> 2 runs + 3 polls, auto-shows real /api response after ~12s. WORKSPACE regression: 'Back-end rodando', iframe shows /api/ping response, Reiniciar -> 'Instalando dependências…' -> back to rodando, route bar /sobre works, Celular toggle -> iframe ~266px, Desktop -> 671px. Docs: docker-compose.yml (MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD:?}, credentialed MONGO_URL), .env.example and DEPLOY_VPS.md mention MONGO_ROOT_PASSWORD consistently. NEW BUG FOUND: stopping (pause) or deleting a project while its backend is still 'installing' leaves an orphan uvicorn running forever (untracked, survives DELETE).",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/projects/{pid}/preview/stop and DELETE /api/projects/{pid} during 'installing' (runner.pause/stop vs _install_and_launch)", "issue": "pause()/stop() pop RUNNERS[pid] and kill st['proc'], but proc is still None while pip installs. The _install_and_launch thread keeps its reference to the popped dict, so it goes on to Popen uvicorn. The process is never tracked: status says 'stopped', the reaper never sees it, and DELETE doesn't kill it either (the dir gets removed while the process keeps running). Reproduced with test_iter15_stop_during_install.py: stop 1s after run, and 45s later uvicorn pid 8918 was still alive after delete (I killed it by hand). The same race applies to ensure(force) / an env change while installing: old['proc'] is None, so the old thread also launches and you get two uvicorns. Fix: put a 'cancelled' flag or generation id in st, set it in pause/stop/ensure-replace, and in _install_and_launch check `RUNNERS.get(pid) is st and not st.get('cancelled')` before Popen and after binding; if the check fails, kill proc. Also run the kill under the per-project lock.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "runner.ensure (lock busy during force restart)", "issue": "While a force restart is in _kill_proc/sync_files, RUNNERS[pid] still holds the old state. A concurrent call then gets {status:'running', old token} even though that proc is being killed. This is short-lived and harmless for LivePreview because the token changes and tick refreshes."},
+      {"endpoint": "DEPLOY_VPS.md backup section", "issue": "`docker compose exec mongodb mongodump --archive=... --db donas` has no credentials. Now that the mongo needs MONGO_ROOT_PASSWORD, it fails with an authentication error. Add `-u donas -p \"$MONGO_ROOT_PASSWORD\" --authenticationDatabase admin`, or `--uri`."},
+      {"endpoint": "sandbox (known limitation, not failed)", "issue": "As documented, `python -S`/bash /dev/tcp can still bypass the Python-level guard in this pod. In the VPS the platform mongo now requires a password."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Workspace preview, Celular mode", "issues": ["The phone-frame notch overlaps the top-left of the content (the 'Sobre page' h1 is partly hidden under it). Consider adding top padding or a safe-area inset inside the phone frame."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter15_pause_uid.py", "/app/backend/tests/test_iter15_stop_during_install.py", "/app/test_reports/pytest/iter15.xml"],
+  "action_items": [
+    "Fix the orphan uvicorn when preview is stopped, deleted or force-restarted while status is 'starting'/'installing' (use a cancel flag or generation check in _install_and_launch, and kill the proc if superseded)",
+    "Add auth credentials to the mongodump command in DEPLOY_VPS.md"
+  ],
+  "critical_code_review_comments": [
+    "runner._install_and_launch has no cancellation path. It should check that RUNNERS.get(pid) is st before and after Popen.",
+    "test_iter14_sandbox.py::TestStopDelete::test_stop_drops_db_and_proc now expects the old stop semantics (dir removed), so it will fail by design. Update it to expect pause behaviour."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter15_pause_uid.py", "/app/backend/tests/test_iter15_stop_during_install.py"],
+  "success_rate": {"backend": "89% (8/9; the 1 failure is the new orphan bug)", "frontend": "100%"},
+  "seed_data_creation": "None kept. All TEST_iter15_* projects and the 2 UI projects were deleted, and one orphan uvicorn was killed by hand. The preview mongod now holds only admin/config/local and donas_admin. The platform DB has no TEST_ projects. The counter db.counters preview_uid is now n>=4 (expected).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run suites with -n 0 (pytest.ini forces xdist). test_iter15_pause_uid.py runs in about 25s. test_iter15_stop_during_install.py reproduces the orphan bug: after it runs, check `ps -eo pid,cmd | grep donas_previews/.*uvicorn` and kill any leftovers. For the LivePreview check, create 2 projects with iter13_ui_setup.py create, run and stop one, then open /p/{id}/live in a new browser context. It showed 'pong' after about 4s (paused) and about 12s (cold)."
+}

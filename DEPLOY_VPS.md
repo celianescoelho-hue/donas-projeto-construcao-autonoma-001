@@ -81,7 +81,7 @@ docker compose up -d --build      # aplicar mudanças de código
 
 ### Backup do banco
 ```bash
-docker compose exec mongodb mongodump --archive=/data/db/backup.archive --db donas
+docker compose exec mongodb sh -c 'mongodump -u donas -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --archive=/data/db/backup.archive --db donas'
 docker compose cp mongodb:/data/db/backup.archive ./backup.archive
 ```
 

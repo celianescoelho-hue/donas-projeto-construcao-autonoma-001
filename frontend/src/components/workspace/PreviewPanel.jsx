@@ -219,7 +219,10 @@ export default function PreviewPanel({ html, building, busy, onFixErrors, onPick
             <div className="relative rounded-[48px] bg-[#1b1b22] border border-white/10 shadow-[0_30px_80px_rgba(0,0,0,0.6)]"
               style={{ width: PHONE_W + BEZEL * 2, height: PHONE_H + BEZEL * 2, padding: BEZEL }} data-testid="preview-phone-frame">
               <div className="absolute left-1/2 -translate-x-1/2 top-[18px] h-[22px] w-[96px] rounded-full bg-black z-10" />
-              <div className="h-full w-full rounded-[38px] overflow-hidden bg-white">{frame}</div>
+              <div className="h-full w-full rounded-[38px] overflow-hidden bg-white flex flex-col">
+                <div className="h-[34px] shrink-0 bg-black" data-testid="preview-phone-statusbar" />
+                <div className="flex-1 min-h-0">{frame}</div>
+              </div>
             </div>
             <p className="text-center font-mono text-[11px] text-muted-foreground mt-3">{PHONE_W} × {PHONE_H} · Android / iOS</p>
           </div>

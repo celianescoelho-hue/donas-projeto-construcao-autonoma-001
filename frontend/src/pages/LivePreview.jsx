@@ -76,7 +76,8 @@ export default function LivePreview() {
     let alive = true;
     const load = async () => {
       try {
-        const initialPath = decodeURIComponent(window.location.hash.slice(1)) || "/";
+        const sub = window.location.pathname.split("/live")[1] || "";
+        const initialPath = decodeURIComponent(window.location.hash.slice(1)) || sub || "/";
         const r = await fetch(`${API}/${id}/preview`);
         if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `Erro ${r.status}`);
         const d = await r.json();

@@ -29,3 +29,12 @@
 - P1: run the generated Python backend in an isolated sandbox for a full-stack preview; publish to a public link.
 - P1: GitHub pull requests instead of direct pushes; real-PAT import/push E2E test.
 - P2: self-testing agent, templates, paid plans.
+
+## 2026-06 — Prévia full-stack (Fase 2)
+- runner.py: back-end real dos projetos (venv + pip + uvicorn em porta livre) com MongoDB próprio da prévia (--auth, usuário por projeto, banco preview_{id}).
+- Isolamento: uid Linux único por projeto (setpriv), pasta 0700, env mínimo sem segredos, .env/credenciais da plataforma 0600/0700, trava de rede em Python (sitecustomize).
+- Proxy reverso: /api/projects/{id}/preview/proxy/* (token da prévia) e /api/public/projects/{id}/preview/proxy/*; o fetch/XHR da prévia é reescrito.
+- Ociosidade de 30 min pausa (mantém venv e dados); excluir projeto remove tudo; reinicia sozinho quando backend/ ou as variáveis mudam.
+- Live Preview: sub-rotas /p/{id}/live/rota e #/rota; recarrega quando o back-end sobe.
+- Docker: Node/Yarn + Python no backend; Mongo da plataforma com senha (MONGO_ROOT_PASSWORD).
+- Limitação na prévia Emergent: sem iptables/unshare, e o Mongo da plataforma não tem senha, então a trava de rede pode ser contornada (python -S). Na VPS, o Mongo com senha fecha essa brecha.

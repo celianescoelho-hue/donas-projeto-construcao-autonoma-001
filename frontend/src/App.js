@@ -36,7 +36,7 @@ function ClerkApp() {
     <ClerkAuthProvider>
       <ClerkBridge>
         <Routes>
-          <Route path="/p/:id/live" element={<LivePreview />} />
+          <Route path="/p/:id/live/*" element={<LivePreview />} />
           <Route path="/" element={<><Show when="signed-out"><Landing /></Show><Show when="signed-in"><MeProvider><Dashboard /></MeProvider></Show></>} />
           <Route path="/sign-in/*" element={<AuthPage><SignIn routing="path" path="/sign-in" signUpUrl="/sign-up" withSignUp /></AuthPage>} />
           <Route path="/sign-up/*" element={<AuthPage><SignUp routing="path" path="/sign-up" signInUrl="/sign-in" /></AuthPage>} />
@@ -53,7 +53,7 @@ function ClerkApp() {
 function SelfHostApp() {
   return (
     <Routes>
-      <Route path="/p/:id/live" element={<LivePreview />} />
+      <Route path="/p/:id/live/*" element={<LivePreview />} />
       <Route path="*" element={
         <SelfHostAuthProvider>
           <MeProvider>

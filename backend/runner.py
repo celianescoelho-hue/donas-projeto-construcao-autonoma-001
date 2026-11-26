@@ -296,11 +296,16 @@ def _install_and_launch(pid: str, env_vars: dict):
         proc_env["DB_NAME"] = f"preview_{pid}"
         proc_env["PORT"] = str(port)
         log.append(f"$ uvicorn server:app --port {port}  (DB_NAME=preview_{pid})")
+        if st.get("cancelled") or RUNNERS.get(pid) is not st:
+            return
         proc = subprocess.Popen(
             _as_uid(uid, [os.path.join(venv, "bin", "uvicorn"), "server:app", "--host", "127.0.0.1", "--port", str(port)]),
             cwd=backend_dir, env=proc_env, start_new_session=True,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         st.update(proc=proc, port=port)
+        if st.get("cancelled") or RUNNERS.get(pid) is not st:
+            _kill_proc(proc)
+            return
 
         import time
         waited = 0.0
@@ -309,6 +314,9 @@ def _install_and_launch(pid: str, env_vars: dict):
                 out = (proc.stdout.read() if proc.stdout else "") or ""
                 log.append("O backend encerrou ao iniciar:\n" + out[-2000:])
                 st.update(status="error", log="\n".join(log))
+                return
+            if st.get("cancelled") or RUNNERS.get(pid) is not st:
+                _kill_proc(proc)
                 return
             if _port_open(port):
                 log.append(f"✓ backend rodando na porta {port}")
@@ -382,6 +390,8 @@ def _drop_preview_db(pid: str):
 def stop(pid: str):
     """Full removal (project deleted): process, work dir, preview DB and its Mongo user."""
     st = RUNNERS.pop(pid, None)
+    if st:
+        st["cancelled"] = True
     if st and st.get("proc"):
         _kill_proc(st["proc"])
     _drop_preview_db(pid)
@@ -391,6 +401,8 @@ def stop(pid: str):
 def pause(pid: str):
     """Stop the process only (idle or manual stop). Keeps .venv, files and the preview data."""
     st = RUNNERS.pop(pid, None)
+    if st:
+        st["cancelled"] = True
     if st and st.get("proc"):
         _kill_proc(st["proc"])
 
@@ -439,6 +451,8 @@ async def ensure(pid: str, env_vars: dict, force: bool = False) -> dict:
             st["last_active"] = _now()
             return status(pid)
         old = RUNNERS.get(pid)
+        if old:
+            old["cancelled"] = True
         if old and old.get("proc"):
             await run_in_threadpool(_kill_proc, old["proc"])
         uid = await _alloc_uid(pid)
