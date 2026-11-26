@@ -15,6 +15,13 @@ from core import (db, now, new_id, decrypt, get_settings, unified_diff, record_v
 
 MAX_STEPS = 30
 SMALL_FILE_LINES = 60
+RETRYABLE_STATUS = {429, 502, 503, 529}
+
+
+class ModelUnavailable(Exception):
+    def __init__(self, status, detail=""):
+        super().__init__(f"{status}: {detail}")
+        self.status, self.detail = status, detail
 
 SYSTEM_PROMPT = """Você é o Donas (Donas Build apps with ai), um engenheiro full-stack sênior que constrói sites e apps completos.
 Padrão de projeto (siga sempre, a menos que o projeto importado use outra estrutura — então respeite a existente):
@@ -35,7 +42,7 @@ FERRAMENTAS — você NÃO tem terminal, shell, git, npm, pip nem acesso à inte
 - Se o usuário pedir para clonar/importar um repositório do GitHub, diga para ele usar o botão "Importar do GitHub" (a plataforma baixa os arquivos sozinha); não tente clonar.
 Trabalhe como um agente:
 - Use search_in_files (texto ou regex, devolve arquivo:linha) para achar onde algo está ANTES de ler; depois read_file só no intervalo de linhas necessário. Use list_files / read_file / search_in_files para entender o projeto antes de editar arquivos existentes. Leia só os trechos necessários (start_line/end_line).
-- Para alterar um arquivo EXISTENTE use replace_in_file enviando APENAS o trecho antigo (old_text, exato, único no arquivo, com contexto suficiente) e o novo. Nunca reescreva um arquivo existente inteiro (create_file só é permitido para arquivos novos ou com até 60 linhas).
+- Para pequenas alterações em um arquivo EXISTENTE prefira replace_in_file enviando APENAS o trecho antigo (old_text, exato, único no arquivo, com contexto suficiente) e o novo. Quando a mudança for grande (reestruturar boa parte do arquivo), use create_file com o conteúdo COMPLETO e final do arquivo — ele sobrescreve o arquivo existente de uma vez. Nunca envie arquivo parcial ou com "..." no create_file.
 - Se uma substituição falhar, leia o trecho atual com read_file e tente de novo.
 - Crie vários arquivos pequenos e bem organizados. Não repita o código dos arquivos na resposta de texto.
 - ARQUIVOS GRANDES (ex.: HTML salvo do navegador com 150 KB+): NUNCA leia o arquivo inteiro nem o recrie com create_file — isso estoura o limite de tokens. Para mover/copiar use move_or_copy_file; para remover links externos use clean_external_links (rode antes com dry_run=true para ver os domínios); para ajustes pontuais use search_in_files + read_file com start_line/end_line + replace_in_file. Para .zip use extract_zip.
@@ -59,7 +66,7 @@ TOOLS = [
             "required": ["query"], "additionalProperties": False}}},
     {"type": "function", "function": {"name": "replace_in_file", "description": "Substitui um trecho exato e único de um arquivo existente por um novo trecho.",
         "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["path", "old_text", "new_text"]}}},
-    {"type": "function", "function": {"name": "create_file", "description": "Cria um arquivo novo (ou reescreve um arquivo existente de até 60 linhas).",
+    {"type": "function", "function": {"name": "create_file", "description": "Cria um arquivo novo ou SOBRESCREVE um existente com o conteúdo completo enviado (use para reescritas grandes; para ajustes pequenos prefira replace_in_file).",
         "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
     {"type": "function", "function": {"name": "delete_file", "description": "Apaga um arquivo do projeto.",
         "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
@@ -506,8 +513,10 @@ class Agent:
                     return "ERRO: caminho vazio."
                 content = args.get("content") or ""
                 f = await self._get(path)
-                if f and f["kind"] == "text" and f["content"].count("\n") + 1 > SMALL_FILE_LINES:
-                    return f"ERRO: '{path}' já existe com mais de {SMALL_FILE_LINES} linhas. Use replace_in_file para editar trechos."
+                if f and f["kind"] != "text":
+                    return f"ERRO: '{path}' é um arquivo binário (imagem/asset); não pode ser sobrescrito com texto."
+                if f and not content.strip():
+                    return f"ERRO: conteúdo vazio para '{path}'. Para remover o arquivo use delete_file."
                 await self._write(path, f, content)
                 await self._card(path, "edit" if f else "create", f.get("content") if f and f["kind"] == "text" else "", content)
                 return f"OK: {path} {'reescrito' if f else 'criado'}."
@@ -574,6 +583,8 @@ class Agent:
                     body = json.loads(body).get("error", {}).get("message", body)
                 except Exception:
                     pass
+                if r.status_code in RETRYABLE_STATUS:
+                    raise ModelUnavailable(r.status_code, str(body)[:300])
                 raise RuntimeError(f"OpenRouter {r.status_code}: {str(body)[:400]}")
             async for line in r.aiter_lines():
                 if not line.startswith("data:"):
@@ -586,7 +597,11 @@ class Agent:
                 except json.JSONDecodeError:
                     continue
                 if chunk.get("error"):
-                    raise RuntimeError(f"OpenRouter: {chunk['error'].get('message', chunk['error'])}")
+                    err = chunk["error"]
+                    code = err.get("code") if isinstance(err, dict) else None
+                    if not text and not calls and code in RETRYABLE_STATUS:
+                        raise ModelUnavailable(code, str(err.get("message", err))[:300])
+                    raise RuntimeError(f"OpenRouter: {err.get('message', err) if isinstance(err, dict) else err}")
                 gen_id = chunk.get("id", gen_id)
                 if chunk.get("usage"):
                     usage = chunk["usage"]
@@ -619,7 +634,23 @@ class Agent:
             "completion_tokens": usage.get("completion_tokens"), "total_tokens": usage.get("total_tokens"),
             "cost": cost, "key_source": key_source, "created_at": now()})
 
-    async def run(self, prompt: str, model: str, api_key: str, key_source: str):
+    async def call_with_fallback(self, client, headers, messages):
+        """Call the current model; on 429/provider-unavailable switch to the next enabled model."""
+        while True:
+            try:
+                return await self.call_model(client, headers, self.model, messages)
+            except ModelUnavailable as e:
+                if self.stream_buf or not self.fallbacks:
+                    raise RuntimeError(f"OpenRouter {e.status}: {e.detail}")
+                nxt = self.fallbacks.pop(0)
+                msg = f"Modelo {self.model} indisponível ({e.status}). Continuando com {nxt}."
+                logger.warning(msg)
+                await self.emit({"type": "fallback", "from": self.model, "to": nxt, "message": msg})
+                self.model = nxt
+
+    async def run(self, prompt: str, model: str, api_key: str, key_source: str, fallbacks=None):
+        self.model = model
+        self.fallbacks = list(fallbacks or [])
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
                    "HTTP-Referer": os.environ.get("APP_PUBLIC_URL", "https://donas.app"), "X-Title": "Donas Build apps with ai"}
         error = None
@@ -627,9 +658,9 @@ class Agent:
             messages = await self.build_messages(prompt)
             async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20, read=180, write=60, pool=20)) as client:
                 for _ in range(MAX_STEPS):
-                    text, calls, usage, gen_id, finish = await self.call_model(client, headers, model, messages)
+                    text, calls, usage, gen_id, finish = await self.call_with_fallback(client, headers, messages)
                     self.stream_buf = ""
-                    await self.record_usage(model, usage, gen_id, key_source)
+                    await self.record_usage(self.model, usage, gen_id, key_source)
                     if text:
                         self.text += text + "\n"
                     if finish == "length":
@@ -693,7 +724,7 @@ class Agent:
         finally:
             if not error and not self.text.strip() and not self.change_cards and not self.warnings:
                 error = "O modelo não retornou nenhuma resposta (pode ter batido no limite de tokens). Tente de novo, divida o pedido ou troque de modelo."
-            await asyncio.shield(self._finish(prompt, model, error))
+            await asyncio.shield(self._finish(prompt, self.model, error))
 
     async def _finish(self, prompt, model, error):
         version = await record_version(self.pid, prompt, self.changes, "ai")

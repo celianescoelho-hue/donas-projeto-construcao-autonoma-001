@@ -574,10 +574,11 @@ async def _start_chat(pid: str, project: dict, body: ChatIn, member: dict, token
         await db.projects.update_one({"id": pid}, {"$set": {"model": model}})
     queue: asyncio.Queue = asyncio.Queue()
     agent = Agent(project, member, queue)
+    fallbacks = [m for m in allowed if m != model]
 
     async def runner():
         try:
-            await asyncio.wait_for(agent.run(body.prompt, model, api_key, source), timeout=RUN_TIMEOUT)
+            await asyncio.wait_for(agent.run(body.prompt, model, api_key, source, fallbacks=fallbacks), timeout=RUN_TIMEOUT)
         except asyncio.TimeoutError:
             logger.warning("agent run timeout for %s", pid)
         except asyncio.CancelledError:

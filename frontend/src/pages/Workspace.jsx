@@ -69,7 +69,19 @@ function useBackendRunner(api, id, files) {
       setBackend(r.data);
     } catch {}
   }, [api, id]);
-  useEffect(() => { if (hasBackend) run(); else setBackend({ status: "no_backend" }); }, [backendSig, hasBackend, run]);
+  // Never auto-start: on open just read the current state (keeps a backend the user already started).
+  useEffect(() => {
+    if (!hasBackend) { setBackend({ status: "no_backend" }); return; }
+    api.get(`/projects/${id}/preview/status`).then((r) => setBackend(r.data)).catch(() => setBackend({ status: "stopped" }));
+  }, [api, id, hasBackend]);
+  // Restart on backend edits ONLY if the user already started it.
+  const statusRef = useRef(backend.status);
+  statusRef.current = backend.status;
+  const firstSig = useRef(true);
+  useEffect(() => {
+    if (firstSig.current) { firstSig.current = false; return; }
+    if (hasBackend && ["running", "starting", "installing", "error"].includes(statusRef.current)) run();
+  }, [backendSig]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!["starting", "installing"].includes(backend.status)) return;
     const t = setInterval(async () => {
@@ -190,6 +202,7 @@ export default function Workspace() {
         else if (ev.type === "tool") { setLive((l) => l && { ...l, tools: [...l.tools, ev] }); log("agent", `${ev.name} ${ev.path || ""}`); }
         else if (ev.type === "tool_error") { setLive((l) => l && { ...l, tools: [...l.tools, { name: ev.name, error: ev.message }] }); log("warn", `${ev.name}: ${ev.message}`); }
         else if (ev.type === "error") { setLive((l) => l && { ...l, error: ev.message }); log("error", ev.message); }
+        else if (ev.type === "fallback") { log("warn", ev.message); }
         else if (ev.type === "warning") { if (/sem usar ferramentas/.test(ev.message)) setLive((l) => l && { ...l, text: "" }); setLive((l) => l && { ...l, warnings: [...l.warnings, ev.message] }); log("warn", ev.message); }
         else if (ev.type === "change") {
           setLive((l) => l && { ...l, changes: [...l.changes, ev] });
