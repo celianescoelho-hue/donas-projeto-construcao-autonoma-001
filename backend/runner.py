@@ -35,6 +35,7 @@ MAX_WAIT = 40  # seconds to wait for uvicorn to bind
 # pid -> state dict
 RUNNERS: dict = {}
 _locks: dict = {}
+_pending: set = set()
 
 # Dedicated, isolated MongoDB for previews. Generated backends connect ONLY to
 # this instance (never the platform DB), so user/AI code cannot read the main
@@ -76,13 +77,21 @@ socket.socket.connect_ex = connect_ex
 '''
 
 
-def _uid(pid: str) -> int:
-    return 20000 + int(hashlib.sha256(pid.encode()).hexdigest(), 16) % 40000
+async def _alloc_uid(pid: str) -> int:
+    """Unique unprivileged uid per project (persisted, never reused)."""
+    p = await core.db.projects.find_one({"id": pid}, {"_id": 0, "preview_uid": 1})
+    if p and p.get("preview_uid"):
+        return int(p["preview_uid"])
+    from pymongo import ReturnDocument
+    c = await core.db.counters.find_one_and_update(
+        {"_id": "preview_uid"}, {"$inc": {"n": 1}}, upsert=True, return_document=ReturnDocument.AFTER)
+    uid = 20000 + int(c["n"])
+    await core.db.projects.update_one({"id": pid}, {"$set": {"preview_uid": uid}})
+    return uid
 
 
-def _as_uid(pid: str, cmd: list) -> list:
-    u = str(_uid(pid))
-    return ["setpriv", f"--reuid={u}", f"--regid={u}", "--clear-groups", "--"] + cmd
+def _as_uid(uid: int, cmd: list) -> list:
+    return ["setpriv", f"--reuid={uid}", f"--regid={uid}", "--clear-groups", "--"] + cmd
 
 
 def harden_platform():
@@ -101,6 +110,9 @@ def harden_platform():
         fh.write(GUARD_CODE)
     os.chmod(GUARD_DIR, 0o755)
     os.chmod(os.path.join(GUARD_DIR, "sitecustomize.py"), 0o644)
+    for f, mode in (("/app/memory", 0o700), ("/etc/supervisor/conf.d", 0o700)):
+        if os.path.isdir(f):
+            os.chmod(f, mode)
     # orphans from a previous platform process
     subprocess.run(["pkill", "-f", f"{WORK_ROOT}/.+/uvicorn"], capture_output=True)
     subprocess.run(["pkill", "-f", f"--dbpath {WORK_ROOT}/_mongo"], capture_output=True)
@@ -243,7 +255,7 @@ def _install_and_launch(pid: str, env_vars: dict):
     pybin = os.path.join(venv, "bin", "python")
     pipbin = os.path.join(venv, "bin", "pip")
     log: list[str] = []
-    uid = _uid(pid)
+    uid = st["uid"]
     try:
         st["status"] = "installing"
         # Private work dir owned by this project's unprivileged uid (others can't read it).
@@ -254,20 +266,20 @@ def _install_and_launch(pid: str, env_vars: dict):
                     "PIP_DISABLE_PIP_VERSION_CHECK": "1"}
         if not os.path.exists(pybin):
             log.append("$ criando ambiente virtual…")
-            subprocess.run(_as_uid(pid, [BASE_PY, "-m", "venv", venv]), env=base_env,
+            subprocess.run(_as_uid(uid, [BASE_PY, "-m", "venv", venv]), env=base_env,
                            check=True, capture_output=True, text=True, timeout=120)
         req = os.path.join(backend_dir, "requirements.txt")
         cmd = [pipbin, "install", "-q"]
         cmd += ["-r", req] if os.path.exists(req) else BASE_DEPS
         log.append("$ pip install " + ("-r requirements.txt" if os.path.exists(req) else " ".join(BASE_DEPS)))
-        r = subprocess.run(_as_uid(pid, cmd), cwd=backend_dir, env=base_env, capture_output=True, text=True, timeout=600)
+        r = subprocess.run(_as_uid(uid, cmd), cwd=backend_dir, env=base_env, capture_output=True, text=True, timeout=600)
         log.append((r.stdout or "")[-1500:])
         if r.returncode != 0:
             log.append("ERRO pip:\n" + (r.stderr or "")[-2000:])
             st.update(status="error", log="\n".join(log))
             return
         # ensure uvicorn is present even if requirements.txt forgot it
-        subprocess.run(_as_uid(pid, [pipbin, "install", "-q", "uvicorn[standard]", "motor"]), cwd=backend_dir,
+        subprocess.run(_as_uid(uid, [pipbin, "install", "-q", "uvicorn[standard]", "motor"]), cwd=backend_dir,
                        env=base_env, capture_output=True, text=True, timeout=300)
 
         port = _free_port()
@@ -285,7 +297,7 @@ def _install_and_launch(pid: str, env_vars: dict):
         proc_env["PORT"] = str(port)
         log.append(f"$ uvicorn server:app --port {port}  (DB_NAME=preview_{pid})")
         proc = subprocess.Popen(
-            _as_uid(pid, [os.path.join(venv, "bin", "uvicorn"), "server:app", "--host", "127.0.0.1", "--port", str(port)]),
+            _as_uid(uid, [os.path.join(venv, "bin", "uvicorn"), "server:app", "--host", "127.0.0.1", "--port", str(port)]),
             cwd=backend_dir, env=proc_env, start_new_session=True,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         st.update(proc=proc, port=port)
@@ -368,11 +380,19 @@ def _drop_preview_db(pid: str):
 
 
 def stop(pid: str):
+    """Full removal (project deleted): process, work dir, preview DB and its Mongo user."""
     st = RUNNERS.pop(pid, None)
     if st and st.get("proc"):
         _kill_proc(st["proc"])
     _drop_preview_db(pid)
     shutil.rmtree(work_dir(pid), ignore_errors=True)
+
+
+def pause(pid: str):
+    """Stop the process only (idle or manual stop). Keeps .venv, files and the preview data."""
+    st = RUNNERS.pop(pid, None)
+    if st and st.get("proc"):
+        _kill_proc(st["proc"])
 
 
 def shutdown_all():
@@ -404,12 +424,13 @@ async def ensure(pid: str, env_vars: dict, force: bool = False) -> dict:
     lock = _lock(pid)
     if not lock.acquire(blocking=False):
         return status(pid)
+    _pending.add(pid)
     try:
         has_backend, sig = await _scan(pid)
         import json as _json
         sig = hashlib.sha256((sig + _json.dumps(env_vars or {}, sort_keys=True)).encode()).hexdigest()
         if not has_backend:
-            await run_in_threadpool(stop, pid)
+            await run_in_threadpool(pause, pid)
             RUNNERS[pid] = {"status": "no_backend", "sig": sig, "last_active": _now()}
             return status(pid)
         st = RUNNERS.get(pid)
@@ -420,14 +441,16 @@ async def ensure(pid: str, env_vars: dict, force: bool = False) -> dict:
         old = RUNNERS.get(pid)
         if old and old.get("proc"):
             await run_in_threadpool(_kill_proc, old["proc"])
+        uid = await _alloc_uid(pid)
         await sync_files(pid)
-        RUNNERS[pid] = {"status": "starting", "sig": sig,
+        RUNNERS[pid] = {"status": "starting", "sig": sig, "uid": uid,
                         "token": (old or {}).get("token") or secrets.token_urlsafe(24),
                         "proc": None, "port": None, "log": "", "runtime_log": "",
                         "started": _now(), "last_active": _now()}
         threading.Thread(target=_install_and_launch, args=(pid, env_vars), daemon=True).start()
         return status(pid)
     finally:
+        _pending.discard(pid)
         lock.release()
 
 
@@ -440,7 +463,7 @@ def touch(pid: str):
 def status(pid: str) -> dict:
     st = RUNNERS.get(pid)
     if not st:
-        return {"status": "stopped"}
+        return {"status": "starting" if pid in _pending else "stopped"}
     return {"status": st["status"], "token": st.get("token"),
             "log": st.get("log", ""), "runtime_log": st.get("runtime_log", "")}
 
@@ -449,7 +472,7 @@ def public_status(pid: str) -> dict:
     """Status for anonymous Live Preview visitors: token to use the proxy, but no logs."""
     st = RUNNERS.get(pid)
     if not st:
-        return {"status": "stopped"}
+        return {"status": "starting" if pid in _pending else "stopped"}
     return {"status": st["status"], "token": st.get("token")}
 
 
@@ -466,8 +489,8 @@ def reaper_loop():
                 st.setdefault("log", "")
                 st["log"] += "\nO processo do backend parou."
             if _now() - st.get("last_active", 0) > IDLE_SECONDS:
-                logger.info("Reaping idle preview %s", pid)
-                stop(pid)
+                logger.info("Pausing idle preview %s", pid)
+                pause(pid)
 
 
 async def proxy(pid: str, method: str, subpath: str, request):

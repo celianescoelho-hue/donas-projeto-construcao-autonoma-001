@@ -2,6 +2,9 @@ services:
   mongodb:
     image: mongo:7
     restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: donas
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?defina MONGO_ROOT_PASSWORD no .env da raiz}
     volumes:
       - mongo_data:/data/db
     networks: [donas]
@@ -12,7 +15,7 @@ services:
     restart: unless-stopped
     env_file: ./backend/.env
     environment:
-      MONGO_URL: mongodb://mongodb:27017
+      MONGO_URL: mongodb://donas:${MONGO_ROOT_PASSWORD}@mongodb:27017/?authSource=admin
       DB_NAME: donas
       AUTH_MODE: selfhost
       STORAGE_BACKEND: local

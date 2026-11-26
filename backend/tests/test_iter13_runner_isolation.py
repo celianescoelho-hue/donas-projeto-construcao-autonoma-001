@@ -7,7 +7,7 @@ import requests
 from conftest import BASE_URL
 
 API = f"{BASE_URL}/api"
-ALLOWED = {"DB_NAME", "HOME", "LANG", "LC_ALL", "MONGO_URL", "PATH", "PORT", "PYTHONUNBUFFERED", "VIRTUAL_ENV"}
+ALLOWED = {"PIP_DISABLE_PIP_VERSION_CHECK", "PIP_NO_CACHE_DIR", "PYTHONPATH", "DONAS_ALLOW_PORTS", "DB_NAME", "HOME", "LANG", "LC_ALL", "MONGO_URL", "PATH", "PORT", "PYTHONUNBUFFERED", "VIRTUAL_ENV"}
 
 SERVER = '''import os
 from fastapi import FastAPI
@@ -83,7 +83,7 @@ def project_uvicorns(pid):
     res = []
     for l in lines:
         p = l.split()[0]
-        if pid in cwd_of(p):
+        if pid in cwd_of(p) or f"/{pid}/" in l:  # /proc/<pid>/cwd unreadable for setpriv'd uids
             res.append(l)
     return res
 

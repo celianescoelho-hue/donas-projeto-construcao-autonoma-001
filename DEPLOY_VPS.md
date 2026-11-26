@@ -23,6 +23,7 @@ cp backend/.env.example backend/.env
 ```
 Edite **`.env`** (raiz):
 - `PUBLIC_ORIGIN` = o endereço público, ex.: `http://203.0.113.10` ou `https://donas.seudominio.com`.
+- `MONGO_ROOT_PASSWORD` = `openssl rand -hex 24` (o banco principal passa a exigir senha; o código dos projetos em prévia não tem acesso a ela).
 
 Edite **`backend/.env`**:
 - `ADMIN_EMAIL` = seu e-mail (será o login admin).
@@ -47,6 +48,15 @@ Acompanhe os logs:
 ```bash
 docker compose logs -f backend
 ```
+
+### Prévia full-stack (back-end real dos projetos)
+O contêiner do backend tem Python e Node/Yarn. Quando um projeto tem `backend/server.py`,
+o Donas cria um ambiente virtual em `/tmp/donas_previews/{id}`, instala o `requirements.txt`
+e roda `uvicorn server:app` numa porta livre, com um MongoDB só para prévias (com senha e
+um usuário por projeto, banco `preview_{id}`). Cada projeto roda com um usuário Linux
+próprio, sem privilégios: não lê o `.env` da plataforma nem os arquivos de outros projetos.
+Processos ociosos por 30 min são encerrados, e o back-end reinicia sozinho quando os
+arquivos em `backend/` ou as variáveis do projeto mudam.
 
 ## 5. Acesse
 Abra `PUBLIC_ORIGIN` no navegador. Vai aparecer a tela de login do Donas: entre

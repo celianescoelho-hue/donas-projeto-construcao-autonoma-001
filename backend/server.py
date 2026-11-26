@@ -277,7 +277,7 @@ async def preview_status(pid: str, member: dict = Depends(current_member)):
 @api.post("/projects/{pid}/preview/stop")
 async def preview_stop(pid: str, member: dict = Depends(current_member)):
     await get_project(pid, member)
-    await run_in_threadpool(runner.stop, pid)
+    await run_in_threadpool(runner.pause, pid)
     return {"ok": True}
 
 

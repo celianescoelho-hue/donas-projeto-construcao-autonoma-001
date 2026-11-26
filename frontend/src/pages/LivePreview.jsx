@@ -31,6 +31,7 @@ export default function LivePreview() {
   useEffect(() => {
     let alive = true; let tries = 0; let timer = null;
     const handle = (d) => {
+      if (!alive) return;
       if (d.token && d.token !== ptokRef.current) { ptokRef.current = d.token; stamp.current = null; setTick((x) => x + 1); }
       if (d.status === "running" && lastStatus.current && lastStatus.current !== "running") setFrameKey((k) => k + 1);
       lastStatus.current = d.status;
@@ -41,14 +42,15 @@ export default function LivePreview() {
         const r = await fetch(`${API}/${id}/preview/status`);
         if (r.ok) handle(await r.json());
       } catch {}
-      if (alive && ["starting", "installing"].includes(lastStatus.current) && tries++ < 120) timer = setTimeout(poll, 3000);
+      const waiting = ["starting", "installing"].includes(lastStatus.current) || (!lastStatus.current || lastStatus.current === "stopped") && tries < 6;
+      if (alive && waiting && tries++ < 120) timer = setTimeout(poll, 3000);
     };
     (async () => {
       try {
         const r = await fetch(`${API}/${id}/preview/run`, { method: "POST" });
         if (r.ok) handle(await r.json());
       } catch {}
-      if (alive && ["starting", "installing"].includes(lastStatus.current)) timer = setTimeout(poll, 3000);
+      if (alive && lastStatus.current !== "running" && lastStatus.current !== "no_backend") timer = setTimeout(poll, 3000);
     })();
     return () => { alive = false; clearTimeout(timer); };
   }, [id]);

@@ -27,7 +27,7 @@ export default function App(){
 }
 '''
 if sys.argv[1] == "create":
-    pid = s.post(f"{API}/projects", json={"name": "TEST_iter13_ui_fullstack"}).json()["id"]
+    pid = s.post(f"{API}/projects", json={"name": "TEST_iter14_ui_fullstack"}).json()["id"]
     for p, c in [("backend/server.py", SERVER), ("backend/requirements.txt", "fastapi\nuvicorn\n"), ("frontend/src/App.js", APP)]:
         assert s.put(f"{API}/projects/{pid}/files", json={"path": p, "content": c}).status_code == 200
     s.patch(f"{API}/projects/{pid}", json={"public_preview": True})
