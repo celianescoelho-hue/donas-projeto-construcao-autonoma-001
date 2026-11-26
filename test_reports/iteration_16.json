@@ -1,0 +1,32 @@
+{
+  "summary": "Iteration 16 - verified 3 improvements. (1) No backend auto-start: on open AND on reload of a project with backend/server.py the only preview call is GET /preview/status (no POST /preview/run); bar shows 'Back-end parado' + 'Rodar back-end'; iframe renders the front immediately. Editing backend/server.py while stopped fires NO run. Clicking Rodar back-end -> Instalando (t=1s) -> rodando (t=11s), iframe visible throughout, then reloads and shows the real /api/ping response ('pong do backend UI'). Editing a backend file while running fires exactly one POST /preview/run (restart). Reopening while running -> only GET status, status=rodando, proxy used without restarting. Error state (ModuleNotFoundError backend): 'Erro no back-end', logs visible, iframe still renders 'Front ok'. (2) Fallback: tests/test_model_fallback.py passes (tried ['qwen/qwen3-coder-next','qwen/qwen3-coder'], 1 fallback event, all-down ends cleanly without looping); test_unknown_tool.py still passes. In the UI, a mocked SSE stream with {type:'fallback'} logs a WRN line in the terminal and the assistant message shows the model that answered (qwen/qwen3-coder). (3) create_file: calling Agent.run_tool directly on a 120-line file -> 'OK: notes.txt reescrito.' with the content replaced; blank content -> ERRO (file unchanged); new file -> 'criado'; overwriting a binary PNG -> ERRO. One real chat (US$0.0007, qwen3-coder-next) rewrote the 120-line notes.txt to 3 lines with a single create_file call (change card edit +3 -120). Regression checks pass: change card -> diff dialog, route chips and route input (/sobre, /), mobile/desktop toggle, versions sheet (7 versions), chat streaming.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "agent.friendly_error", "issue": "The briefing mentions a 'friendly_error 429' change, but friendly_error has no 429 branch. When every model is unavailable the user sees the raw text 'OpenRouter 429: <provider detail>' instead of a friendly Portuguese message (e.g. 'Todos os modelos estão com limite de uso agora; tente em alguns minutos')."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Preview while the backend is stopped", "issues": ["Existing behaviour, not caused by this change: with no proxy, the project's fetch('/api/ping') falls through to the host app's /api (404 JSON), so the demo text field ends up blank instead of showing an error or the front's fallback. It might help to stub /api calls with a clear 'back-end parado' error when no proxy is set, so fronts with sample-data fallbacks behave predictably."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter16_create_file_fallback.py", "/app/backend/tests/iter16_ui_setup.py", "/app/backend/tests/iter16_real_chat.py", "/app/test_reports/pytest/iter16.xml"],
+  "action_items": [
+    "Optional: add a 429 / all-models-unavailable branch to friendly_error so the final error is user-friendly"
+  ],
+  "critical_code_review_comments": [
+    "call_with_fallback is correct: it only switches models when nothing has streamed yet (stream_buf is empty), pops from a copied list (so it cannot loop forever), records usage and _finish with self.model (so the saved model is the one that answered).",
+    "Mid-stream error chunks only raise ModelUnavailable when no text or tool calls have arrived yet. This is good, because it avoids duplicate partial output.",
+    "Workspace useBackendRunner: the firstSig skip plus statusRef gating works. The first sig change after files load happens while status is still 'stopped', so it cannot auto-start even when a backend is already running on the server. Reopening only reads the status.",
+    "SMALL_FILE_LINES = 60 is still defined in agent.py. Confirm it is no longer used to block create_file (direct tests show it is not)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter16_create_file_fallback.py", "/app/backend/tests/iter16_ui_setup.py", "/app/backend/tests/iter16_real_chat.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "seed_data_creation": "Created throwaway projects TEST_iter16_createfile, TEST_iter16_status (deleted by fixture), TEST_iter16_ui_fullstack and TEST_iter16_err (deleted manually, no preview processes left).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Creating or editing files under /app/backend/tests triggers a backend hot-reload, which wipes the in-memory RUNNERS, so running previews show as 'parado' afterwards. This is a test artefact. Use iter16_ui_setup.py create|delete <pid> for a full-stack test project. A real 429 cannot be triggered on demand; the fallback UI was verified by mocking the SSE /chat response with page.route."
+}

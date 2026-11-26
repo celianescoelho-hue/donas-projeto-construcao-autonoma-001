@@ -745,6 +745,8 @@ def friendly_error(e: Exception) -> str:
         return "A OpenRouter demorou demais para responder (tempo esgotado). Tente de novo ou peça uma mudança menor."
     if "402" in msg or "credits" in low:
         return f"Sem saldo na OpenRouter para este modelo. ({msg[:200]})"
+    if "openrouter 429" in low or "openrouter 503" in low or "openrouter 502" in low:
+        return f"Todos os modelos liberados estão indisponíveis ou com limite de uso no momento. Tente de novo em alguns minutos. ({msg[:200]})"
     return msg or e.__class__.__name__
 
 

@@ -38,3 +38,8 @@
 - Live Preview: sub-rotas /p/{id}/live/rota e #/rota; recarrega quando o back-end sobe.
 - Docker: Node/Yarn + Python no backend; Mongo da plataforma com senha (MONGO_ROOT_PASSWORD).
 - Limitação na prévia Emergent: sem iptables/unshare, e o Mongo da plataforma não tem senha, então a trava de rede pode ser contornada (python -S). Na VPS, o Mongo com senha fecha essa brecha.
+
+## 2026-11 — Velocidade e estabilidade
+- Back-end da prévia só inicia no clique "Rodar back-end"; ao abrir, só consulta o status; reinicia nas edições apenas se já estava iniciado. O iframe do front nunca some. Com o back-end parado, chamadas /api recebem 503 "Back-end parado".
+- Fallback de modelo: 429/502/503/529 da OpenRouter → próximo modelo liberado (evento "fallback" no terminal); a mensagem salva registra o modelo que respondeu. tests/test_model_fallback.py.
+- create_file sobrescreve arquivos de qualquer tamanho; bloqueia conteúdo vazio em arquivo existente e sobrescrita de binário.

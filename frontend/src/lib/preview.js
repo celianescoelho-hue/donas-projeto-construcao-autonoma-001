@@ -94,7 +94,14 @@ const routeScript = (initialPath) => `<script>window.__donasInitialPath=${JSON.s
 
 // Rewrites the project's /api calls (fetch + XHR) to the real running backend via the reverse proxy.
 const apiProxyScript = (proxy) => {
-  if (!proxy || !proxy.base) return "";
+  if (!proxy || !proxy.base) return `<script>(function(){
+  var of=window.fetch;
+  function isApi(u){ try{ var s=typeof u==='string'?u:(u&&u.url)||''; s=s.replace(/^(undefined|null)(?=\\/api)/,''); return s==='/api'||s.indexOf('/api/')===0; }catch(e){ return false; } }
+  window.fetch=function(input,init){
+    if(isApi(input)) return Promise.resolve(new Response(JSON.stringify({detail:'Back-end parado: clique em Rodar back-end na prévia.'}),{status:503,headers:{'Content-Type':'application/json'}}));
+    return of(input,init);
+  };
+})();</script>`;
   const cfg = JSON.stringify({ base: proxy.base, token: proxy.token || "" }).replace(/</g, "\\u003c");
   return `<script>(function(){
   var P=${cfg};
